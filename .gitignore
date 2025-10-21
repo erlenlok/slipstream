@@ -1,0 +1,14 @@
+# Project-local environments
+.venv/
+
+# Python cache
+__pycache__/
+*.py[cod]
+
+# Data outputs
+*.csv
+data/
+
+# Misc tooling
+.ruff_cache/
+.pytest_cache/
