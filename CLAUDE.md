@@ -2,6 +2,17 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+## Initialization
+
+**IMPORTANT**: On every new conversation initialization, read all documentation files in `docs/` to gain full context:
+- `docs/strategy_spec.md` - Complete strategy specification and trading logic
+- `docs/TIMESCALE_MATCHING.md` - Theoretical framework for PCA timescale matching
+- `docs/volume_weighted_pca_research.md` - Research on volume weighting methodologies
+- `docs/volume_weighted_pca_implementation.md` - Implementation details for volume-weighted PCA
+- `docs/QUICKSTART_VOLUME_PCA.md` - Practical guide for H* optimization workflow
+
+This context is essential for understanding the research goals, implementation decisions, and current state of the framework.
+
 ## Project Overview
 
 Slipstream is a Python trading and research framework for the Hyperliquid perpetual futures exchange. The project uses a `src/` layout with `uv` for dependency management, separating data acquisition tooling from core trading logic.
@@ -10,10 +21,16 @@ Slipstream is a Python trading and research framework for the Hyperliquid perpet
 
 ### Directory Structure
 
-- **`src/slipstream/`**: Trading logic, strategy implementations, position management, order execution (currently empty - add your trading utilities here)
+- **`src/slipstream/`**: Trading logic and strategy implementations (importable package)
+  - `signals/` - Signal generation functions (single source of truth for alpha models)
+    - `base.py` - Base interfaces and validation functions
+    - `pca_momentum.py` - PCA-based idiosyncratic momentum signals
+    - `utils.py` - Signal processing utilities (normalization, autocorrelation analysis)
+  - `portfolio/` - (future) Position sizing and portfolio construction
 - **`scripts/`**:
   - `data_load.py` - Data acquisition utility for downloading hourly OHLCV, funding, and return data
   - `build_pca_factor.py` - Rolling PCA market factor computation from returns data
+  - `find_optimal_horizon.py` - H* optimization via timescale-matched PCA grid generation
 - **`notebooks/`**: Research and backtesting analysis
 - **`data/`**: (git-ignored)
   - `market_data/` - Raw market data CSVs (candles, funding, merged returns)
@@ -118,11 +135,53 @@ uv run ruff check
 uv run pytest
 ```
 
+## Signal Generation Architecture
+
+The `src/slipstream/signals/` module implements the alpha model (strategy_spec.md Section 3.1) as pure DataFrame transformations. This provides a single source of truth for signal logic that can be imported into notebooks for research and used in production.
+
+**Design principles:**
+- Signals are pure functions: DataFrame in → DataFrame out
+- No hidden state or side effects
+- Composable and testable
+- All signals use consistent long format: MultiIndex (timestamp, asset) with 'signal' column
+
+**Key functions:**
+- `compute_idiosyncratic_returns()`: Extract residuals after removing market factor (PC1)
+- `idiosyncratic_momentum()`: Primary alpha signal - EWMA-based idiosyncratic momentum panel
+- `normalize_signal_cross_sectional()`: Cross-sectional z-score/rank normalization
+- `compute_signal_autocorrelation()`: For signal half-life analysis (Section 4.4)
+
+**Example usage in notebooks:**
+```python
+from slipstream.signals import idiosyncratic_momentum
+
+# Load data
+returns = load_all_returns()  # Wide format
+pca_data = pd.read_csv('data/features/pca_factor_H24_K30_sqrt.csv')
+pca_data['timestamp'] = pd.to_datetime(pca_data['timestamp'])
+
+# Extract PCA components
+loadings = pca_data.set_index(['timestamp', 'asset'])['loading']
+market_factor = pca_data.groupby('timestamp')['market_return'].first()
+
+# Compute panel of momentum indicators (idio_mom_2, idio_mom_4, idio_mom_8, etc.)
+momentum_panel = idiosyncratic_momentum(
+    returns=returns,
+    pca_loadings=loadings,
+    market_factor=market_factor,
+    spans=[2, 4, 8, 16, 32],  # Multi-timescale EWMA
+    normalization='volatility'
+)
+
+# Access specific momentum: momentum_panel.xs(8, level='span') for idio_mom_8
+```
+
 ## Development Notes
 
 - Python version is pinned to 3.11 via `.python-version`
 - **Code organization**:
-  - `src/slipstream/` - Trading and strategy code (importable package)
+  - `src/slipstream/signals/` - Signal generation (importable, single source of truth)
+  - `src/slipstream/portfolio/` - (future) Position sizing and portfolio construction
   - `scripts/` - Data acquisition and feature engineering scripts
   - `notebooks/` - Research and backtesting
   - `data/market_data/` - Raw market data CSVs (git-ignored)
@@ -132,7 +191,7 @@ uv run pytest
 - PCA factor files use naming: `pca_factor_H{hours}_K{multiplier}_{method}.csv` for timescale-matched factors
 - When adding data loading functionality, extend `scripts/data_load.py` following the async pattern
 - When adding new features, create scripts in `scripts/` and output to `data/features/`
-- When adding trading logic, create modules in `src/slipstream/` (importable from notebooks)
+- **When adding signal logic, create/extend modules in `src/slipstream/signals/` (importable from notebooks)**
 - All timestamps are handled in UTC and converted to milliseconds for API calls via `ms(dt)`
 - Candle timestamps are floored to the hour via `to_hour(dt_ms)`
 
