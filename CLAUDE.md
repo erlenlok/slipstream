@@ -31,9 +31,17 @@ Slipstream is a Python trading and research framework for the Hyperliquid perpet
 
 **`scripts/build_pca_factor.py`** - Factor construction:
 - `load_all_returns()` - Loads all merged return files from `data/market_data/` into wide matrix
-- `resample_to_daily()` - Aggregates hourly log returns to daily
+- `resample_returns()` - Aggregates hourly log returns to specified frequency (hourly, 4H, 6H, daily, etc.)
 - `compute_rolling_pca_loadings()` - Computes rolling PCA with PC1 loadings as market factor weights, handling variable asset counts
-- Outputs to `data/features/pca_factor_loadings.csv` with daily loadings per asset + metadata
+- `compute_rolling_pca_loadings_weighted()` - Volume-weighted PCA variant
+- Supports timescale-matched PCA: frequency and window adapt to holding period H
+- Outputs to `data/features/pca_factor_*.csv` with period loadings per asset + metadata
+
+**`scripts/find_optimal_horizon.py`** - Optimal holding period (H*) search:
+- Implements timescale matching principle: PCA frequency = H, window = K × H
+- Generates grid of PCA factors for different (H, K, weight_method) combinations
+- Solves circular dependency between optimal H and optimal PCA parameters
+- Output naming: `pca_factor_H{hours}_K{multiplier}_{method}.csv`
 
 ### HTTP Layer
 
@@ -74,14 +82,31 @@ uv run hl-load --coin ETH --start 2024-01-01 --end 2024-03-01
 ```
 
 ### Factor Construction
+
+#### Timescale-Matched PCA (Recommended)
 ```bash
-# Build PCA market factor (default: 60-day rolling window)
-python scripts/build_pca_factor.py
+# Generate PCA factors for multiple holding periods (H* search)
+python scripts/find_optimal_horizon.py --H 6 12 24 48 --K 30
 
-# Custom parameters
-python scripts/build_pca_factor.py --window 30 --min-assets 5 --min-periods 20
+# Test different volume weighting methods
+python scripts/find_optimal_horizon.py --H 24 --K 30 --weight-method sqrt log sqrt_dollar
 
-# Outputs to data/features/pca_factor_loadings.csv
+# Fine-tune lookback window around optimal H
+python scripts/find_optimal_horizon.py --H 24 --K 20 30 40 60 --weight-method sqrt
+
+# Outputs to data/features/pca_factor_H{H}_K{K}_{method}.csv
+```
+
+#### Manual PCA Factor Generation
+```bash
+# 6-hourly PCA with 180-hour lookback
+python scripts/build_pca_factor.py --freq 6H --window 180 --weight-method sqrt
+
+# Daily PCA with 1440-hour (60-day) lookback (legacy default)
+python scripts/build_pca_factor.py --freq D --window 1440
+
+# Custom frequency and window
+python scripts/build_pca_factor.py --freq 4H --window 480 --weight-method sqrt_dollar
 ```
 
 ### Development
@@ -104,8 +129,17 @@ uv run pytest
   - `data/features/` - Computed features (git-ignored)
 - The `hl-load` CLI entry point wraps `scripts/data_load.py` via `python -m slipstream`
 - Data files use naming convention: `{COIN}_{type}_1h.csv` where type is `candles`, `funding`, or `merged`
+- PCA factor files use naming: `pca_factor_H{hours}_K{multiplier}_{method}.csv` for timescale-matched factors
 - When adding data loading functionality, extend `scripts/data_load.py` following the async pattern
 - When adding new features, create scripts in `scripts/` and output to `data/features/`
 - When adding trading logic, create modules in `src/slipstream/` (importable from notebooks)
 - All timestamps are handled in UTC and converted to milliseconds for API calls via `ms(dt)`
 - Candle timestamps are floored to the hour via `to_hour(dt_ms)`
+
+## Strategy Implementation Notes
+
+The Slipstream strategy (see `docs/strategy_spec.md`) requires finding optimal holding period H*:
+- **Circular dependency**: Optimal H depends on PCA quality, but PCA parameters depend on target H
+- **Solution**: Timescale matching - set PCA frequency = H and window = K × H
+- **Workflow**: Use `find_optimal_horizon.py` to generate PCA grid → backtest each → plot Sharpe vs H → find H*
+- See `docs/QUICKSTART_VOLUME_PCA.md` for detailed guide on H* optimization

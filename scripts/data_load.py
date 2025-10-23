@@ -33,12 +33,12 @@ def to_hour(dt_ms: int) -> datetime:
 
 # ---------- http ----------
 RETRYABLE_STATUS = {429, 500, 502, 503, 504}
-REQUEST_PAUSE_SECONDS = 0.25
+REQUEST_PAUSE_SECONDS = 0.5  # Doubled from 0.25 to be more API-friendly
 
 
 async def _post_json(client: httpx.AsyncClient, payload: dict[str, Any], *, max_attempts: int = 5) -> Any:
-    """POST helper with basic retry & throttling for rate limits."""
-    delay = REQUEST_PAUSE_SECONDS
+    """POST helper with gentle retry & throttling for rate limits."""
+    delay = 1.0  # Start with 1 second delay for retries (doubled from 0.5)
     for attempt in range(max_attempts):
         try:
             response = await client.post(API_URL, json=payload)
@@ -48,12 +48,14 @@ async def _post_json(client: httpx.AsyncClient, payload: dict[str, Any], *, max_
         except httpx.HTTPStatusError as exc:
             status = exc.response.status_code
             if status in RETRYABLE_STATUS and attempt + 1 < max_attempts:
+                print(f"  Retrying after {status} error (attempt {attempt + 1}/{max_attempts}), waiting {delay:.1f}s...")
                 await asyncio.sleep(delay)
                 delay *= 2
                 continue
             raise
         except httpx.RequestError:
             if attempt + 1 < max_attempts:
+                print(f"  Retrying after request error (attempt {attempt + 1}/{max_attempts}), waiting {delay:.1f}s...")
                 await asyncio.sleep(delay)
                 delay *= 2
                 continue
@@ -169,20 +171,24 @@ async def fetch_candles_1h(
         cur = chunk_end
 
     if not rows:
-        return pd.DataFrame(columns=["close"])
+        return pd.DataFrame(columns=["open", "high", "low", "close", "volume"])
 
     df = pd.DataFrame(rows)
     out = (
-        df.loc[:, ["t", "c"]]
-        .rename(columns={"t": "ts", "c": "close"})
+        df.loc[:, ["t", "o", "h", "l", "c", "v"]]
+        .rename(columns={"t": "ts", "o": "open", "h": "high", "l": "low", "c": "close", "v": "volume"})
         .assign(
+            open=lambda x: x["open"].astype(float),
+            high=lambda x: x["high"].astype(float),
+            low=lambda x: x["low"].astype(float),
             close=lambda x: x["close"].astype(float),
+            volume=lambda x: x["volume"].astype(float),
             ts=lambda x: x["ts"].astype("int64"),
         )
     )
     out["datetime"] = out["ts"].map(to_hour)
     out = out.drop_duplicates("datetime").set_index("datetime").sort_index()
-    return out[["close"]]
+    return out[["open", "high", "low", "close", "volume"]]
 
 
 async def fetch_funding_hourly(
