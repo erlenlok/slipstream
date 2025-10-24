@@ -81,6 +81,8 @@ uv sync
 ```
 
 ### Data Loading
+
+#### API Data (Recent ~7 months)
 ```bash
 # Print live perp markets
 uv run python -m slipstream
@@ -96,6 +98,27 @@ uv run hl-load --all --dex "(default)" --days 30
 
 # Custom date range
 uv run hl-load --coin ETH --start 2024-01-01 --end 2024-03-01
+```
+
+#### S3 Historical Data (Full history back to Oct 2023)
+```bash
+# Setup (one-time)
+sudo apt install lz4
+aws configure  # Enter AWS credentials
+
+# Test setup
+./.aws_setup_test.sh
+
+# Fetch historical data from S3 (resumable)
+python scripts/fetch_s3_historical.py --start 2023-10-01 --end 2025-03-27
+
+# Fetch specific coins only
+python scripts/fetch_s3_historical.py --start 2023-10-01 --end 2025-03-27 --coins BTC ETH SOL
+
+# Validate against API data
+python scripts/fetch_s3_historical.py --validate
+
+# See docs/S3_HISTORICAL_DATA.md for detailed guide
 ```
 
 ### Factor Construction
@@ -184,7 +207,8 @@ momentum_panel = idiosyncratic_momentum(
   - `src/slipstream/portfolio/` - (future) Position sizing and portfolio construction
   - `scripts/` - Data acquisition and feature engineering scripts
   - `notebooks/` - Research and backtesting
-  - `data/market_data/` - Raw market data CSVs (git-ignored)
+  - `data/market_data/` - API-based recent market data CSVs (~7 months, git-ignored)
+  - `data/s3_historical/` - S3-based historical candles (Oct 2023+, git-ignored)
   - `data/features/` - Computed features (git-ignored)
 - The `hl-load` CLI entry point wraps `scripts/data_load.py` via `python -m slipstream`
 - Data files use naming convention: `{COIN}_{type}_1h.csv` where type is `candles`, `funding`, or `merged`
