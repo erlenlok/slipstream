@@ -21,33 +21,38 @@ from sklearn.decomposition import PCA
 
 def load_all_returns(data_dir: Path, pattern: str = "*_merged_1h.csv") -> pd.DataFrame:
     """
-    Load all merged return files and construct a wide returns matrix.
+    Load all candle files and compute returns on the fly.
 
     Returns:
         DataFrame with datetime index and one column per asset (coin name from filename).
         NaN for missing/invalid returns.
     """
+    # Convert merged pattern to candles pattern
+    candles_pattern = pattern.replace("_merged_", "_candles_")
+
     # Look in market_data subdirectory
     market_data_dir = data_dir / "market_data"
-    files = sorted(market_data_dir.glob(pattern))
+    files = sorted(market_data_dir.glob(candles_pattern))
     if not files:
-        raise ValueError(f"No files matching {pattern} found in {market_data_dir}")
+        raise ValueError(f"No files matching {candles_pattern} found in {market_data_dir}")
 
     print(f"Loading {len(files)} assets from {market_data_dir}")
 
     returns_dict = {}
     for fpath in files:
-        # Extract coin name from filename pattern: COIN_merged_1h.csv
+        # Extract coin name from filename pattern: COIN_candles_1h.csv
         parts = fpath.stem.split("_")
-        if len(parts) >= 3 and parts[-2] == "merged":
-            coin = "_".join(parts[:-2])  # e.g., BTC from BTC_merged_1h.csv
+        if len(parts) >= 3 and parts[-2] == "candles":
+            coin = "_".join(parts[:-2])  # e.g., BTC from BTC_candles_1h.csv
         else:
             coin = fpath.stem
 
         try:
             df = pd.read_csv(fpath, index_col=0, parse_dates=True)
-            if "ret" in df.columns:
-                returns_dict[coin] = df["ret"]
+            if "close" in df.columns:
+                # Compute log returns from close prices
+                log_returns = np.log(df["close"] / df["close"].shift(1))
+                returns_dict[coin] = log_returns
         except Exception as exc:
             print(f"Warning: failed to load {fpath.name}: {exc}")
 
@@ -59,7 +64,7 @@ def load_all_returns(data_dir: Path, pattern: str = "*_merged_1h.csv") -> pd.Dat
     returns_wide.index = pd.to_datetime(returns_wide.index, utc=True)
     returns_wide = returns_wide.sort_index()
 
-    print(f"Loaded returns matrix: {returns_wide.shape[0]} hours × {returns_wide.shape[1]} assets")
+    print(f"Loaded returns matrix: {returns_wide.shape[0]} periods × {returns_wide.shape[1]} assets")
     print(f"Date range: {returns_wide.index[0]} to {returns_wide.index[-1]}")
 
     return returns_wide
@@ -440,13 +445,14 @@ def parse_args() -> argparse.Namespace:
         "--data-dir",
         type=Path,
         default=Path("data"),
-        help="Directory containing *_merged_1h.csv files (default: data)",
+        help="Directory containing market data files (default: data)",
     )
     p.add_argument(
-        "--pattern",
+        "--interval",
         type=str,
-        default="*_merged_1h.csv",
-        help="File pattern to match (default: *_merged_1h.csv)",
+        default="1h",
+        choices=["1h", "4h"],
+        help="Data interval: 1h or 4h (default: 1h)",
     )
     p.add_argument(
         "--freq",
@@ -496,8 +502,12 @@ def parse_args() -> argparse.Namespace:
 def main() -> None:
     args = parse_args()
 
+    # Construct patterns based on interval
+    merged_pattern = f"*_merged_{args.interval}.csv"
+    candles_pattern = f"*_candles_{args.interval}.csv"
+
     # Load all returns
-    returns_1h = load_all_returns(args.data_dir, pattern=args.pattern)
+    returns_1h = load_all_returns(args.data_dir, pattern=merged_pattern)
 
     # Resample to specified frequency
     returns_resampled = resample_returns(returns_1h, freq=args.freq)
@@ -545,7 +555,7 @@ def main() -> None:
         else:
             # Volume-weighted PCA
             # Load volume data
-            volumes_1h = load_volume_data(args.data_dir, pattern="*_candles_1h.csv")
+            volumes_1h = load_volume_data(args.data_dir, pattern=candles_pattern)
 
             # Load prices if needed for dollar volume methods
             prices_resampled = None
@@ -553,7 +563,7 @@ def main() -> None:
                 print("Loading price data for dollar volume calculation...")
                 # Load prices from candles
                 market_data_dir = args.data_dir / "market_data"
-                files = sorted(market_data_dir.glob("*_candles_1h.csv"))
+                files = sorted(market_data_dir.glob(candles_pattern))
                 prices_dict = {}
                 for fpath in files:
                     parts = fpath.stem.split("_")

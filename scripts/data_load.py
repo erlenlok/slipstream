@@ -142,14 +142,26 @@ async def fetch_all_perp_markets(client: httpx.AsyncClient) -> pd.DataFrame:
 
 
 # ---------- market data ----------
-async def fetch_candles_1h(
+async def fetch_candles(
     client: httpx.AsyncClient,
     coin: str,
     start: datetime,
     end: datetime,
+    interval: str = "1h",
 ) -> pd.DataFrame:
-    """Paginate 1h candles in chunks to stay under ~5k-candle caps."""
-    chunk_days = 120  # 120*24=2880 < 5000
+    """Paginate candles in chunks to stay under ~5k-candle caps.
+
+    Args:
+        interval: "1h" or "4h" (API supports 1m, 5m, 15m, 1h, 4h, 1d)
+    """
+    # Adjust chunk size based on interval to stay under 5000 candle limit
+    if interval == "1h":
+        chunk_days = 120  # 120*24=2880 < 5000
+    elif interval == "4h":
+        chunk_days = 500  # 500*24/4=3000 < 5000
+    else:
+        chunk_days = 120  # Conservative default
+
     rows: list[dict[str, Any]] = []
     cur = start
 
@@ -159,7 +171,7 @@ async def fetch_candles_1h(
             "type": "candleSnapshot",
             "req": {
                 "coin": coin,
-                "interval": "1h",
+                "interval": interval,
                 "startTime": ms(cur),
                 "endTime": ms(chunk_end),
             },
@@ -235,9 +247,9 @@ async def fetch_funding_hourly(
     return out
 
 
-def compute_hourly_log_returns(candles_1h: pd.DataFrame) -> pd.DataFrame:
-    """Vectorized hourly log returns from 1h close prices."""
-    log_returns = np.log1p(candles_1h["close"].pct_change())
+def compute_log_returns(candles: pd.DataFrame) -> pd.DataFrame:
+    """Vectorized log returns from close prices."""
+    log_returns = np.log1p(candles["close"].pct_change())
     return log_returns.to_frame(name="ret")
 
 
@@ -247,28 +259,32 @@ async def build_datasets(
     start: datetime,
     end: datetime,
     out_prefix: str,
+    interval: str = "1h",
 ) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
     """Fetch candles+funding, compute returns, align, and write CSVs to market_data/."""
     candles, funding = await asyncio.gather(
-        fetch_candles_1h(client, coin, start, end),
+        fetch_candles(client, coin, start, end, interval),
         fetch_funding_hourly(client, coin, start, end),
     )
-    rets = compute_hourly_log_returns(candles)
+    rets = compute_log_returns(candles)
 
-    hourly_index = pd.date_range(start=start, end=end, freq="1h", tz=timezone.utc)
-    hourly = pd.DataFrame(index=hourly_index).join(rets, how="left").join(funding, how="left")
+    # Use candle frequency for index (not always hourly for 4h data)
+    freq = interval if interval in ["1h", "4h"] else "1h"
+    aligned_index = pd.date_range(start=start, end=end, freq=freq, tz=timezone.utc)
+    aligned = pd.DataFrame(index=aligned_index).join(rets, how="left").join(funding, how="left")
 
-    candles.to_csv(f"{out_prefix}/market_data/{coin}_candles_1h.csv", index=True)
-    funding.to_csv(f"{out_prefix}/market_data/{coin}_funding_1h.csv", index=True)
-    hourly.to_csv(f"{out_prefix}/market_data/{coin}_merged_1h.csv", index=True)
+    candles.to_csv(f"{out_prefix}/market_data/{coin}_candles_{interval}.csv", index=True)
+    funding.to_csv(f"{out_prefix}/market_data/{coin}_funding_{interval}.csv", index=True)
+    aligned.to_csv(f"{out_prefix}/market_data/{coin}_merged_{interval}.csv", index=True)
 
-    return candles, funding, hourly
+    return candles, funding, aligned
 
 
 async def build_for_universe(
     start: datetime,
     end: datetime,
     out_prefix: str,
+    interval: str = "1h",
     dex_filter: str | None = None,
 ) -> None:
     """Fetch & write datasets for all live markets (optionally filter by dex name)."""
@@ -288,7 +304,7 @@ async def build_for_universe(
             # Remove dex prefix from filename since we're organizing by directory
             print(f"- {dex}: {coin}")
             try:
-                await build_datasets(client, coin=coin, start=start, end=end, out_prefix=out_prefix)
+                await build_datasets(client, coin=coin, start=start, end=end, out_prefix=out_prefix, interval=interval)
                 await asyncio.sleep(REQUEST_PAUSE_SECONDS)
             except Exception as exc:  # noqa: BLE001
                 print(f"  Warning: failed for {coin} ({dex}): {exc}")
@@ -296,10 +312,11 @@ async def build_for_universe(
 
 # ---------- CLI ----------
 def parse_args() -> argparse.Namespace:
-    p = argparse.ArgumentParser(description="Fetch Hyperliquid perp hourly returns & funding.")
+    p = argparse.ArgumentParser(description="Fetch Hyperliquid perp returns & funding.")
     p.add_argument("--coin", type=str, default="", help="Single market symbol (e.g., BTC). If empty and --all not set, prints markets.")
     p.add_argument("--all", action="store_true", help="Fetch for all live perp markets.")
     p.add_argument("--dex", type=str, default=None, help="Filter to a specific dex namespace (use with --all).")
+    p.add_argument("--interval", type=str, default="1h", choices=["1h", "4h"], help="Candle interval: 1h or 4h (default: 1h).")
     p.add_argument("--days", type=int, default=180, help="Lookback window in days (default: 180).")
     p.add_argument("--start", type=str, default=None, help="ISO start (UTC). Overrides --days if set.")
     p.add_argument("--end", type=str, default=None, help="ISO end (UTC). Defaults to now.")
@@ -335,13 +352,13 @@ async def main() -> None:
 
         # All markets
         if args.all:
-            await build_for_universe(start=start_dt, end=end_dt, out_prefix=args.out_prefix, dex_filter=args.dex)
+            await build_for_universe(start=start_dt, end=end_dt, out_prefix=args.out_prefix, interval=args.interval, dex_filter=args.dex)
             return
 
         # Single market
         coin = args.coin.upper()
-        print(f"Fetching {coin} from {start_dt.isoformat()} to {end_dt.isoformat()} …")
-        await build_datasets(client, coin=coin, start=start_dt, end=end_dt, out_prefix=args.out_prefix)
+        print(f"Fetching {coin} ({args.interval}) from {start_dt.isoformat()} to {end_dt.isoformat()} …")
+        await build_datasets(client, coin=coin, start=start_dt, end=end_dt, out_prefix=args.out_prefix, interval=args.interval)
         print("Done.")
 
 

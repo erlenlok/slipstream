@@ -181,17 +181,28 @@ def parse_l2_snapshot_to_candle(lz4_path: Path, coin: str, date_hour: datetime) 
             try:
                 record = json.loads(line)
 
-                # Extract best bid and ask from L2 levels
-                # Format: {"levels": [[bid_price, bid_size], [ask_price, ask_size], ...], "time": ms}
-                if "levels" in record and len(record["levels"]) >= 2:
-                    levels = record["levels"]
-                    # Assuming first two levels are best bid/ask
-                    if len(levels[0]) >= 1 and len(levels[1]) >= 1:
-                        bid = float(levels[0][0])
-                        ask = float(levels[1][0])
-                        mid = (bid + ask) / 2
-                        mid_prices.append(mid)
-            except (json.JSONDecodeError, KeyError, IndexError, ValueError):
+                # Navigate nested structure: raw.data.levels
+                # Format: {"raw": {"data": {"levels": [[bids_array], [asks_array]]}}}
+                if "raw" not in record or "data" not in record["raw"]:
+                    continue
+
+                data = record["raw"]["data"]
+                if "levels" not in data or len(data["levels"]) != 2:
+                    continue
+
+                bids_array = data["levels"][0]  # Array of bid orders
+                asks_array = data["levels"][1]  # Array of ask orders
+
+                if not bids_array or not asks_array:
+                    continue
+
+                # Extract best bid and ask (first element of each array)
+                best_bid = float(bids_array[0]["px"])
+                best_ask = float(asks_array[0]["px"])
+                mid = (best_bid + best_ask) / 2
+                mid_prices.append(mid)
+
+            except (json.JSONDecodeError, KeyError, IndexError, ValueError, TypeError):
                 # Skip malformed records
                 continue
 
