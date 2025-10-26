@@ -2,12 +2,12 @@
 PCA-based momentum signals for return prediction.
 
 This module implements the core alpha signal generation for the Slipstream strategy.
-The primary signal is based on volume-normalized idiosyncratic momentum computed from
+The primary signal is based on volatility-normalized idiosyncratic momentum computed from
 residuals after removing the market factor (PC1 from PCA).
 
 References:
     - docs/strategy_spec.md Section 3.1: Alpha Model
-    - docs/volume_weighted_pca_research.md: Volume weighting methodology
+    - docs/volume_weighted_pca_research.md: Volume weighting methodology (for PCA, not signals)
 """
 
 import pandas as pd
@@ -189,9 +189,9 @@ def idiosyncratic_momentum(
         market_factor: Series with timestamp index containing PC1 returns
         spans: List of EWMA span parameters (in hours) to compute momentum for.
                Default: [2, 4, 8, 16, 32, 64] for multi-timescale panel
-        normalization: How to normalize the momentum signal
-            - 'volatility': Divide by EWMA volatility (default)
-            - 'none': No normalization (raw EWMA)
+        normalization: How to normalize the idiosyncratic returns before momentum calc
+            - 'volatility': Normalize returns by EWMA volatility before computing momentum (default)
+            - 'none': No normalization (raw EWMA on unnormalized returns)
         vol_span: Span for volatility EWMA. If None, uses max(spans) * 2
 
     Returns:
@@ -227,7 +227,7 @@ def idiosyncratic_momentum(
     # Step 1: Extract idiosyncratic returns
     idio_returns = compute_idiosyncratic_returns(returns, pca_loadings, market_factor)
 
-    # Step 2: Compute volatility if needed for normalization
+    # Step 2: Volatility-normalize idiosyncratic returns FIRST (if requested)
     if normalization == 'volatility':
         if vol_span is None:
             vol_span = max(spans) * 2
@@ -237,16 +237,18 @@ def idiosyncratic_momentum(
         # Avoid division by zero
         volatility = volatility.replace(0, np.nan)
 
-    # Step 3: Compute EWMA momentum for each span
+        # Normalize returns before computing momentum
+        # This puts all assets on the same volatility scale
+        idio_returns_normalized = idio_returns / volatility
+    else:
+        idio_returns_normalized = idio_returns
+
+    # Step 3: Compute EWMA momentum for each span (on normalized returns)
     momentum_panels = {}
 
     for span in spans:
-        # EWMA of idiosyncratic returns
-        momentum = idio_returns.ewm(span=span, min_periods=span // 2).mean()
-
-        # Normalize by volatility if requested
-        if normalization == 'volatility':
-            momentum = momentum / volatility
+        # EWMA of volatility-normalized idiosyncratic returns
+        momentum = idio_returns_normalized.ewm(span=span, min_periods=span // 2).mean()
 
         # Convert to long format and store
         momentum_long = momentum.stack()
