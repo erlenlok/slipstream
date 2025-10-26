@@ -20,6 +20,7 @@ def build_pca_for_horizon(
     K_multiplier: int,
     data_dir: Path,
     weight_method: str = "sqrt",
+    interval: str = "1h",
 ) -> Path:
     """
     Build PCA factor matched to holding period H.
@@ -29,6 +30,7 @@ def build_pca_for_horizon(
         K_multiplier: Lookback window = K * H hours
         data_dir: Data directory
         weight_method: Volume weighting method
+        interval: Base candle interval ("1h" or "4h")
 
     Returns:
         Path to generated PCA factor file
@@ -51,6 +53,7 @@ def build_pca_for_horizon(
 
     print(f"\n{'='*60}")
     print(f"Building PCA for H={H_hours}h, K={K_multiplier}, method={weight_method}")
+    print(f"  Base interval: {interval}")
     print(f"  Frequency: {freq}")
     print(f"  Window: {window_hours} hours ({window_hours // H_hours} periods)")
     print(f"  Output: {output_path}")
@@ -61,6 +64,7 @@ def build_pca_for_horizon(
         "python",
         "scripts/build_pca_factor.py",
         "--data-dir", str(data_dir),
+        "--interval", interval,
         "--freq", freq,
         "--window", str(window_hours),
         "--weight-method", weight_method,
@@ -77,6 +81,7 @@ def generate_pca_grid(
     K_multipliers: list[int],
     data_dir: Path,
     weight_methods: list[str],
+    interval: str = "1h",
 ) -> None:
     """
     Generate all PCA factors for grid of (H, K, weight_method) combinations.
@@ -113,6 +118,7 @@ def generate_pca_grid(
                         K_multiplier=K,
                         data_dir=data_dir,
                         weight_method=method,
+                        interval=interval,
                     )
                     results.append({
                         "H": H,
@@ -202,6 +208,13 @@ Examples:
         choices=["none", "sqrt", "log", "dollar", "sqrt_dollar"],
         help="Volume weighting methods to test (default: sqrt)",
     )
+    p.add_argument(
+        "--interval",
+        type=str,
+        default="1h",
+        choices=["1h", "4h"],
+        help="Base candle interval (default: 1h)",
+    )
     return p.parse_args()
 
 
@@ -213,6 +226,7 @@ def main() -> None:
         K_multipliers=args.K,
         data_dir=args.data_dir,
         weight_methods=args.weight_method,
+        interval=args.interval,
     )
 
 

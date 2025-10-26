@@ -13,6 +13,52 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 This context is essential for understanding the research goals, implementation decisions, and current state of the framework.
 
+## Repository Status
+
+**IMPORTANT**: This section should be periodically revisited and refreshed during the session as work progresses. Update this section when:
+- Completing major implementations or features
+- Discovering new limitations or TODOs
+- Changing implementation priorities
+- After significant debugging or refactoring
+
+Consider reviewing and updating this status every 20-30 messages or when switching to a new major task.
+
+---
+
+### Current Implementation Status
+
+**✓ Complete:**
+- Signal generation framework (EWMA idiosyncratic momentum)
+- S3 historical data downloader (resumable, full coverage Oct 2023+)
+- Timescale-matched PCA factor generation (1, 2, or 3 components)
+- Market factor (PC1 returns) computation from loadings and returns
+- Multi-factor residuals (PC1+PC2+PC3) with pre-orthogonalization
+- Multi-span momentum panel computation
+- Transaction cost model with liquidity sensitivity
+- Volume-weighted PCA (sqrt, log, sqrt_dollar methods)
+- Data pipeline (API + S3) with proper pagination and retry logic
+
+**⚠️ Partial/Simplified:**
+- Alpha model: Framework ready with momentum signals, but predictive models not yet trained
+- Portfolio optimization: Theory documented in `strategy_spec.md`, implementation pending
+- Funding rate prediction: Model specification ready, implementation pending
+
+**📋 Planned:**
+- Full backtesting framework with cost-aware optimization (Section 4.1 of strategy_spec.md)
+- Discrete lot rounding with beta repair algorithm (Section 4.1.1)
+- H* optimization simulation across holding periods (Section 4.2)
+- Funding rate prediction model (Section 3.1)
+- Transaction cost parameter estimation from L2 orderbook data
+- Portfolio optimizer with multi-factor neutrality constraints
+- Live trading integration (future)
+
+**Known Limitations:**
+- No automated retraining pipeline for models
+- Cost model parameters need empirical calibration from L2 orderbook data
+- Funding rate predictions not yet implemented
+
+---
+
 ## Project Overview
 
 Slipstream is a Python trading and research framework for the Hyperliquid perpetual futures exchange. The project uses a `src/` layout with `uv` for dependency management, separating data acquisition tooling from core trading logic.
@@ -70,6 +116,59 @@ The project implements retry logic with exponential backoff for retryable HTTP s
 2. Compute log returns: `log_returns = np.log1p(candles["close"].pct_change())`
 3. Create aligned hourly index and join all datasets
 4. Write three CSV outputs: `{prefix}_{coin}_candles_1h.csv`, `{prefix}_{coin}_funding_1h.csv`, `{prefix}_{coin}_merged_1h.csv`
+
+## Multi-Factor PCA (New!)
+
+The framework now supports 1, 2, or 3 principal components for more complete hedging of systematic risk.
+
+**Key Innovation:** Pre-orthogonalize returns against PC1+PC2+PC3 to get truly idiosyncratic signals, then use a **single** constraint (β₁ᵀw=0) in optimization rather than three separate constraints.
+
+See `docs/COMPOSITE_BETA_APPROACH.md` for mathematical details and `docs/MULTI_FACTOR_PCA.md` for research framework.
+
+### Generating Multi-Component PCA Factors
+
+```bash
+# Generate 3-component PCA (PC1, PC2, PC3)
+python scripts/build_pca_factor.py --freq 24H --window 720 --n-components 3 --weight-method sqrt
+
+# Output: data/features/pca_factor_loadings_3pc.csv
+# Columns: BTC_pc1, BTC_pc2, BTC_pc3, ETH_pc1, ETH_pc2, ...
+```
+
+### Using Multi-Factor Residuals in Signals
+
+```python
+from slipstream.signals import compute_multifactor_residuals
+
+# Load 3-component PCA file
+pca = pd.read_csv('data/features/pca_factor_H24_K30_sqrt_3pc.csv', index_col=0)
+
+# Extract loadings for each component
+# (helper function in notebook or create utility)
+loadings_pc1 = extract_loadings(pca, component=1)
+loadings_pc2 = extract_loadings(pca, component=2)
+loadings_pc3 = extract_loadings(pca, component=3)
+
+# Compute factor returns
+factor_pc1 = compute_market_factor(loadings_pc1_wide, returns)
+factor_pc2 = compute_market_factor(loadings_pc2_wide, returns)
+factor_pc3 = compute_market_factor(loadings_pc3_wide, returns)
+
+# Remove all three systematic components
+idio_returns = compute_multifactor_residuals(
+    returns,
+    loadings_pc1, loadings_pc2, loadings_pc3,
+    factor_pc1, factor_pc2, factor_pc3
+)
+
+# Build signals from truly idiosyncratic returns
+momentum = idiosyncratic_momentum(
+    idio_returns,  # Already has PC1+PC2+PC3 removed!
+    loadings_pc1,  # Still need for constraint β₁ᵀw=0
+    factor_pc1,    # (Will be near-zero impact since pre-orthogonalized)
+    ...
+)
+```
 
 ## Common Commands
 

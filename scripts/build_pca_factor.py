@@ -225,9 +225,10 @@ def compute_rolling_pca_loadings(
     window_days: int = 60,
     min_assets: int = 10,
     min_periods: int = 30,
+    n_components: int = 1,
 ) -> pd.DataFrame:
     """
-    Compute rolling PCA and extract PC1 loadings (market factor weights).
+    Compute rolling PCA and extract PC loadings (market factor weights).
 
     For each day, compute PCA on the trailing window_days of returns.
     Only include assets with sufficient valid data in the window.
@@ -237,17 +238,20 @@ def compute_rolling_pca_loadings(
         window_days: Rolling window size in days
         min_assets: Minimum number of assets required to compute PCA
         min_periods: Minimum number of valid observations required per asset
+        n_components: Number of principal components to compute (1, 2, or 3)
 
     Returns:
-        DataFrame with datetime index and one column per asset containing PC1 loadings.
+        DataFrame with datetime index and columns for each PC loading per asset.
+        - For n_components=1: One column per asset (PC1 loadings)
+        - For n_components=3: Three columns per asset (asset_pc1, asset_pc2, asset_pc3)
         NaN for assets excluded from PCA on that day.
     """
     dates = returns_daily.index
     assets = returns_daily.columns
 
-    # Pre-allocate output matrix
-    loadings_matrix = np.full((len(dates), len(assets)), np.nan)
-    variance_explained = np.full(len(dates), np.nan)
+    # Pre-allocate output matrices - one per component
+    loadings_matrices = [np.full((len(dates), len(assets)), np.nan) for _ in range(n_components)]
+    variance_explained = np.full((len(dates), n_components), np.nan)
     n_assets_used = np.full(len(dates), 0, dtype=int)
 
     print(f"Computing rolling PCA with {window_days}-day window...")
@@ -276,17 +280,18 @@ def compute_rolling_pca_loadings(
 
         # Fit PCA
         try:
-            pca = PCA(n_components=1)
+            pca = PCA(n_components=n_components)
             pca.fit(window_clean)
 
-            # Extract PC1 loadings
-            pc1_loadings = pca.components_[0]  # Shape: (n_valid_assets,)
+            # Extract loadings for each component
+            for pc_idx in range(n_components):
+                pc_loadings = pca.components_[pc_idx]  # Shape: (n_valid_assets,)
 
-            # Map back to full asset list
-            asset_indices = [assets.get_loc(asset) for asset in valid_assets]
-            loadings_matrix[i, asset_indices] = pc1_loadings
+                # Map back to full asset list
+                asset_indices = [assets.get_loc(asset) for asset in valid_assets]
+                loadings_matrices[pc_idx][i, asset_indices] = pc_loadings
 
-            variance_explained[i] = pca.explained_variance_ratio_[0]
+            variance_explained[i, :] = pca.explained_variance_ratio_[:n_components]
             n_assets_used[i] = len(valid_assets)
 
             pca_computed += 1
@@ -298,19 +303,41 @@ def compute_rolling_pca_loadings(
             continue
 
     # Convert to DataFrame
-    loadings_df = pd.DataFrame(
-        loadings_matrix,
-        index=dates,
-        columns=assets,
-    )
+    if n_components == 1:
+        # Single component: original format (asset columns)
+        loadings_df = pd.DataFrame(
+            loadings_matrices[0],
+            index=dates,
+            columns=assets,
+        )
+        loadings_df["_variance_explained"] = variance_explained[:, 0]
+    else:
+        # Multiple components: suffixed columns (asset_pc1, asset_pc2, asset_pc3)
+        column_data = {}
+        for pc_idx in range(n_components):
+            for asset in assets:
+                col_name = f"{asset}_pc{pc_idx + 1}"
+                column_data[col_name] = loadings_matrices[pc_idx][:, assets.get_loc(asset)]
 
-    # Add summary statistics
-    loadings_df["_variance_explained"] = variance_explained
+        loadings_df = pd.DataFrame(column_data, index=dates)
+
+        # Add variance explained for each component
+        for pc_idx in range(n_components):
+            loadings_df[f"_variance_explained_pc{pc_idx + 1}"] = variance_explained[:, pc_idx]
+
+    # Add asset count metadata
     loadings_df["_n_assets"] = n_assets_used
 
     valid_days = (n_assets_used > 0).sum()
     print(f"Completed PCA for {valid_days}/{len(dates)} days")
-    print(f"Mean variance explained by PC1: {variance_explained[~np.isnan(variance_explained)].mean():.3f}")
+
+    # Print variance explained statistics
+    for pc_idx in range(n_components):
+        var_exp = variance_explained[:, pc_idx]
+        valid_var = var_exp[~np.isnan(var_exp)]
+        if len(valid_var) > 0:
+            print(f"Mean variance explained by PC{pc_idx + 1}: {valid_var.mean():.3f}")
+
     print(f"Mean assets per day: {n_assets_used[n_assets_used > 0].mean():.1f}")
 
     return loadings_df
@@ -322,9 +349,10 @@ def compute_rolling_pca_loadings_weighted(
     window_days: int = 60,
     min_assets: int = 10,
     min_periods: int = 30,
+    n_components: int = 1,
 ) -> pd.DataFrame:
     """
-    Compute rolling PCA with volume weighting and extract PC1 loadings.
+    Compute rolling PCA with volume weighting and extract PC loadings.
 
     Volume weighting is applied by scaling returns before PCA fitting.
 
@@ -334,17 +362,20 @@ def compute_rolling_pca_loadings_weighted(
         window_days: Rolling window size in days
         min_assets: Minimum number of assets required to compute PCA
         min_periods: Minimum number of valid observations required per asset
+        n_components: Number of principal components to compute (1, 2, or 3)
 
     Returns:
-        DataFrame with datetime index and one column per asset containing PC1 loadings.
+        DataFrame with datetime index and columns for each PC loading per asset.
+        - For n_components=1: One column per asset (PC1 loadings)
+        - For n_components=3: Three columns per asset (asset_pc1, asset_pc2, asset_pc3)
         NaN for assets excluded from PCA on that day.
     """
     dates = returns_daily.index
     assets = returns_daily.columns
 
-    # Pre-allocate output matrix
-    loadings_matrix = np.full((len(dates), len(assets)), np.nan)
-    variance_explained = np.full(len(dates), np.nan)
+    # Pre-allocate output matrices - one per component
+    loadings_matrices = [np.full((len(dates), len(assets)), np.nan) for _ in range(n_components)]
+    variance_explained = np.full((len(dates), n_components), np.nan)
     n_assets_used = np.full(len(dates), 0, dtype=int)
 
     print(f"Computing volume-weighted rolling PCA with {window_days}-day window...")
@@ -389,18 +420,19 @@ def compute_rolling_pca_loadings_weighted(
 
         # Fit PCA on weighted returns
         try:
-            pca = PCA(n_components=1)
+            pca = PCA(n_components=n_components)
             pca.fit(weighted_returns)
 
-            # Extract PC1 loadings
-            pc1_loadings = pca.components_[0]  # Shape: (n_valid_assets,)
-
-            # Map back to full asset list
+            # Extract loadings for each component
             valid_asset_list = returns_clean.columns
-            asset_indices = [assets.get_loc(asset) for asset in valid_asset_list]
-            loadings_matrix[i, asset_indices] = pc1_loadings
+            for pc_idx in range(n_components):
+                pc_loadings = pca.components_[pc_idx]  # Shape: (n_valid_assets,)
 
-            variance_explained[i] = pca.explained_variance_ratio_[0]
+                # Map back to full asset list
+                asset_indices = [assets.get_loc(asset) for asset in valid_asset_list]
+                loadings_matrices[pc_idx][i, asset_indices] = pc_loadings
+
+            variance_explained[i, :] = pca.explained_variance_ratio_[:n_components]
             n_assets_used[i] = len(valid_asset_list)
 
             pca_computed += 1
@@ -412,19 +444,41 @@ def compute_rolling_pca_loadings_weighted(
             continue
 
     # Convert to DataFrame
-    loadings_df = pd.DataFrame(
-        loadings_matrix,
-        index=dates,
-        columns=assets,
-    )
+    if n_components == 1:
+        # Single component: original format (asset columns)
+        loadings_df = pd.DataFrame(
+            loadings_matrices[0],
+            index=dates,
+            columns=assets,
+        )
+        loadings_df["_variance_explained"] = variance_explained[:, 0]
+    else:
+        # Multiple components: suffixed columns (asset_pc1, asset_pc2, asset_pc3)
+        column_data = {}
+        for pc_idx in range(n_components):
+            for asset in assets:
+                col_name = f"{asset}_pc{pc_idx + 1}"
+                column_data[col_name] = loadings_matrices[pc_idx][:, assets.get_loc(asset)]
 
-    # Add summary statistics
-    loadings_df["_variance_explained"] = variance_explained
+        loadings_df = pd.DataFrame(column_data, index=dates)
+
+        # Add variance explained for each component
+        for pc_idx in range(n_components):
+            loadings_df[f"_variance_explained_pc{pc_idx + 1}"] = variance_explained[:, pc_idx]
+
+    # Add asset count metadata
     loadings_df["_n_assets"] = n_assets_used
 
     valid_days = (n_assets_used > 0).sum()
     print(f"Completed volume-weighted PCA for {valid_days}/{len(dates)} days")
-    print(f"Mean variance explained by PC1: {variance_explained[~np.isnan(variance_explained)].mean():.3f}")
+
+    # Print variance explained statistics
+    for pc_idx in range(n_components):
+        var_exp = variance_explained[:, pc_idx]
+        valid_var = var_exp[~np.isnan(var_exp)]
+        if len(valid_var) > 0:
+            print(f"Mean variance explained by PC{pc_idx + 1}: {valid_var.mean():.3f}")
+
     print(f"Mean assets per day: {n_assets_used[n_assets_used > 0].mean():.1f}")
 
     return loadings_df
@@ -496,6 +550,13 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Compute PCA for all weighting methods and save separately with suffixes",
     )
+    p.add_argument(
+        "--n-components",
+        type=int,
+        default=1,
+        choices=[1, 2, 3],
+        help="Number of principal components to compute (default: 1)",
+    )
     return p.parse_args()
 
 
@@ -551,6 +612,7 @@ def main() -> None:
                 window_days=window_periods,
                 min_assets=args.min_assets,
                 min_periods=args.min_periods,
+                n_components=args.n_components,
             )
         else:
             # Volume-weighted PCA
@@ -606,14 +668,22 @@ def main() -> None:
                 window_days=window_periods,
                 min_assets=args.min_assets,
                 min_periods=args.min_periods,
+                n_components=args.n_components,
             )
 
         # Save results
         if args.compare_all:
             # Add method suffix to output path
-            output_path = args.output.parent / f"{args.output.stem}_{method}{args.output.suffix}"
+            suffix = f"_{method}"
+            if args.n_components > 1:
+                suffix += f"_{args.n_components}pc"
+            output_path = args.output.parent / f"{args.output.stem}{suffix}{args.output.suffix}"
         else:
-            output_path = args.output
+            # Add n_components suffix if > 1
+            if args.n_components > 1:
+                output_path = args.output.parent / f"{args.output.stem}_{args.n_components}pc{args.output.suffix}"
+            else:
+                output_path = args.output
 
         save_factor_weights(loadings, output_path)
         print(f"\n{method.upper()} method complete.\n")

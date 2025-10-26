@@ -70,6 +70,101 @@ def compute_idiosyncratic_returns(
     return idio_wide
 
 
+def compute_multifactor_residuals(
+    returns: pd.DataFrame,
+    loadings_pc1: pd.Series,
+    loadings_pc2: pd.Series,
+    loadings_pc3: pd.Series,
+    factor_pc1: pd.Series,
+    factor_pc2: pd.Series,
+    factor_pc3: pd.Series,
+) -> pd.DataFrame:
+    """Compute idiosyncratic returns by removing PC1, PC2, PC3 exposures.
+
+    This implements the residual calculation from the multi-factor model:
+        R = alpha + beta1*F1 + beta2*F2 + beta3*F3 + epsilon
+
+    where epsilon is the truly idiosyncratic component we want to extract.
+
+    By pre-orthogonalizing returns against all three factors, the resulting
+    signals will automatically be neutral to PC1, PC2, and PC3. This allows
+    the portfolio optimizer to use a single constraint (beta1^T w = 0) as a
+    safety check rather than requiring three separate constraints.
+
+    Args:
+        returns: Wide DataFrame with timestamp index and asset columns
+        loadings_pc1: Long Series with (timestamp, asset) index (PC1 betas)
+        loadings_pc2: Long Series with (timestamp, asset) index (PC2 betas)
+        loadings_pc3: Long Series with (timestamp, asset) index (PC3 betas)
+        factor_pc1: Series with timestamp index containing PC1 returns
+        factor_pc2: Series with timestamp index containing PC2 returns
+        factor_pc3: Series with timestamp index containing PC3 returns
+
+    Returns:
+        Wide DataFrame with same shape as returns, containing pure idiosyncratic
+        components with all three principal components removed.
+
+    Example:
+        >>> # Load multi-component PCA file
+        >>> pca = pd.read_csv('data/features/pca_factor_H24_K30_sqrt_3pc.csv')
+        >>> pca['timestamp'] = pd.to_datetime(pca.index)
+        >>>
+        >>> # Extract loadings for each component
+        >>> assets = [col.split('_pc')[0] for col in pca.columns if '_pc1' in col]
+        >>> loadings_pc1 = pca[[f'{a}_pc1' for a in assets]].stack()
+        >>> loadings_pc2 = pca[[f'{a}_pc2' for a in assets]].stack()
+        >>> loadings_pc3 = pca[[f'{a}_pc3' for a in assets]].stack()
+        >>>
+        >>> # Compute factor returns (weighted sums)
+        >>> factor_pc1 = compute_market_factor(loadings_pc1, returns)
+        >>> factor_pc2 = compute_market_factor(loadings_pc2, returns)
+        >>> factor_pc3 = compute_market_factor(loadings_pc3, returns)
+        >>>
+        >>> # Remove all three factors
+        >>> idio_returns = compute_multifactor_residuals(
+        ...     returns, loadings_pc1, loadings_pc2, loadings_pc3,
+        ...     factor_pc1, factor_pc2, factor_pc3
+        ... )
+    """
+    validate_returns_dataframe(returns, "returns")
+
+    # Convert returns to long format
+    returns_long = returns.stack().rename('return')
+    returns_long.index.names = ['timestamp', 'asset']
+
+    # Align all data on common timestamps and assets
+    common_index = (
+        returns_long.index
+        .intersection(loadings_pc1.index)
+        .intersection(loadings_pc2.index)
+        .intersection(loadings_pc3.index)
+    )
+
+    returns_aligned = returns_long.loc[common_index]
+    loadings_pc1_aligned = loadings_pc1.loc[common_index]
+    loadings_pc2_aligned = loadings_pc2.loc[common_index]
+    loadings_pc3_aligned = loadings_pc3.loc[common_index]
+
+    # Broadcast factor returns to all assets at each timestamp
+    timestamps = returns_aligned.index.get_level_values('timestamp')
+    factor_pc1_aligned = factor_pc1.reindex(timestamps).values
+    factor_pc2_aligned = factor_pc2.reindex(timestamps).values
+    factor_pc3_aligned = factor_pc3.reindex(timestamps).values
+
+    # Remove all three systematic components
+    # epsilon = R - (beta1*F1 + beta2*F2 + beta3*F3)
+    idio_long = returns_aligned - (
+        (loadings_pc1_aligned * factor_pc1_aligned) +
+        (loadings_pc2_aligned * factor_pc2_aligned) +
+        (loadings_pc3_aligned * factor_pc3_aligned)
+    )
+
+    # Convert back to wide format
+    idio_wide = idio_long.unstack(level='asset')
+
+    return idio_wide
+
+
 def idiosyncratic_momentum(
     returns: pd.DataFrame,
     pca_loadings: pd.DataFrame,

@@ -9,6 +9,10 @@ __pycache__/
 *.csv
 data/
 
+# Logs
+logs/
+*.log
+
 # Misc tooling
 .ruff_cache/
 .pytest_cache/
