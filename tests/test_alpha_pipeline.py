@@ -59,3 +59,30 @@ def test_market_factor_projection_matches_dot_product():
     # For the first timestamp, normalization denominator sqrt(0.6^2 + 0.8^2) = 1
     expected_first = 0.6 * 0.01 + 0.8 * 0.02
     assert pytest.approx(factor.iloc[0]) == expected_first
+
+
+def test_momentum_is_clipped():
+    index = pd.date_range("2024-01-01", periods=10, freq="4h", tz="UTC")
+    returns = pd.DataFrame(
+        {
+            "A": np.linspace(-0.1, 0.1, 10),
+            "B": np.linspace(0.2, -0.2, 10),
+        },
+        index=index,
+    )
+    loadings = pd.Series(1.0, index=pd.MultiIndex.from_product([index, ["A", "B"]]), name="loading")
+    market_factor = pd.Series(0.0, index=index)
+
+    from slipstream.signals import idiosyncratic_momentum
+
+    momentum = idiosyncratic_momentum(
+        returns=returns,
+        pca_loadings=loadings,
+        market_factor=market_factor,
+        spans=[2],
+        normalization="volatility",
+        vol_span=4,
+        clip=2.5,
+    )
+
+    assert (momentum['momentum'].abs() <= 2.5).all()

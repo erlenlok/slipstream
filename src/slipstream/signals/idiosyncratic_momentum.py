@@ -175,6 +175,7 @@ def idiosyncratic_momentum(
     normalization: Literal['volatility', 'none'] = 'volatility',
     vol_span: Optional[int] = None,
     base_interval_hours: int = BASE_INTERVAL_HOURS,
+    clip: float = 2.5,
 ) -> pd.DataFrame:
     """Compute EWMA-based idiosyncratic momentum indicators.
 
@@ -239,7 +240,7 @@ def idiosyncratic_momentum(
         vol_span_bars = max(1, int(round(vol_span / base_interval_hours)))
         volatility = idio_returns.ewm(
             span=vol_span_bars,
-            min_periods=max(1, vol_span_bars // 2)
+            min_periods=vol_span_bars
         ).std()
         # Avoid division by zero
         volatility = volatility.replace(0, np.nan)
@@ -258,8 +259,9 @@ def idiosyncratic_momentum(
         span_bars = max(1, int(round(span / base_interval_hours)))
         momentum = idio_returns_normalized.ewm(
             span=span_bars,
-            min_periods=max(1, span_bars // 2)
+            min_periods=span_bars
         ).mean()
+        momentum = momentum.clip(lower=-clip, upper=clip)
 
         # Convert to long format and store
         momentum_long = momentum.stack()

@@ -161,7 +161,8 @@ def train_model_for_H(
             raise ValueError("No overlapping assets between PCA loadings, returns, and funding.")
 
         returns_aligned = returns.loc[loadings_expanded.index, common_assets]
-        funding_aligned = funding.loc[loadings_expanded.index, common_assets]
+        funding_aligned = funding.reindex(loadings_expanded.index, method="ffill")
+        funding_aligned = funding_aligned[common_assets]
         loadings_expanded = loadings_expanded[common_assets]
 
         # Drop rows that still have insufficient data

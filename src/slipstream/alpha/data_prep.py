@@ -17,34 +17,37 @@ BASE_INTERVAL_HOURS = 4  # All merged market data is sampled every 4 hours
 
 def load_all_returns(data_dir: str = "data/market_data") -> pd.DataFrame:
     """
-    Load 4-hourly returns for all assets from merged files.
+    Load 4-hourly log returns for all assets from candle files.
 
     Args:
-        data_dir: Directory containing *_merged_4h.csv files
+        data_dir: Directory containing *_candles_4h.csv files
 
     Returns:
         Wide DataFrame with datetime index and asset columns containing log returns
     """
     data_path = Path(data_dir)
-    merged_files = list(data_path.glob("*_merged_4h.csv"))
+    candle_files = list(data_path.glob("*_candles_4h.csv"))
 
-    if not merged_files:
-        raise FileNotFoundError(f"No *_merged_4h.csv files found in {data_dir}")
+    if not candle_files:
+        raise FileNotFoundError(f"No *_candles_4h.csv files found in {data_dir}")
 
     returns_dict = {}
 
-    for file in merged_files:
-        # Extract asset name from filename (e.g., "BTC_merged_4h.csv" -> "BTC")
-        asset = file.stem.replace("_merged_4h", "")
+    for file in candle_files:
+        # Extract asset name from filename (e.g., "BTC_candles_4h.csv" -> "BTC")
+        asset = file.stem.replace("_candles_4h", "")
 
-        # Load file (first column is datetime index, no name)
         df = pd.read_csv(file, index_col=0, parse_dates=True)
+        if 'close' not in df.columns:
+            continue
 
-        # Get log returns column (named 'ret' in merged files)
-        if 'ret' in df.columns:
-            returns_dict[asset] = df['ret']
+        closes = df['close'].astype(float)
+        log_returns = np.log(closes / closes.shift(1))
+        returns_dict[asset] = log_returns
 
-    # Combine into wide DataFrame
+    if not returns_dict:
+        raise ValueError("No valid candle data found to compute returns.")
+
     returns = pd.DataFrame(returns_dict)
     returns = returns.sort_index()
 
@@ -109,6 +112,7 @@ def compute_funding_features(
     std_lookback: int = 90 * 24,  # 90 days in hours
     vol_span: int = 128,  # For normalizing (hours)
     base_interval_hours: int = BASE_INTERVAL_HOURS,
+    clip: float = 5.0,
 ) -> pd.DataFrame:
     """
     Compute EWMA funding features, normalized by historical volatility.
@@ -134,7 +138,7 @@ def compute_funding_features(
     # 1. Compute funding volatility for each asset using EWMA
     funding_vol = funding_rates.ewm(
         span=vol_span_bars,
-        min_periods=max(1, vol_span_bars // 2)
+        min_periods=vol_span_bars
     ).std()
 
     # Avoid division by zero
@@ -150,8 +154,10 @@ def compute_funding_features(
         span_bars = _hours_to_bars(span, base_interval_hours)
         ewma = funding_norm.ewm(
             span=span_bars,
-            min_periods=max(1, span_bars // 2)
+            min_periods=span_bars
         ).mean()
+
+        ewma = ewma.clip(lower=-clip, upper=clip)
 
         # Convert to long format
         ewma_long = ewma.stack()
@@ -175,6 +181,7 @@ def compute_forward_returns(
     H: int = 24,
     vol_span: int = 128,
     base_interval_hours: int = BASE_INTERVAL_HOURS,
+    target_clip: float = 10.0,
 ) -> Tuple[pd.Series, pd.Series]:
     """
     Compute H-period forward returns, vol-normalized.
@@ -202,7 +209,7 @@ def compute_forward_returns(
     vol_span_bars = _hours_to_bars(vol_span, base_interval_hours)
     volatility = returns.ewm(
         span=vol_span_bars,
-        min_periods=max(1, vol_span_bars // 2)
+        min_periods=vol_span_bars
     ).std()
     volatility = volatility.replace(0, np.nan)
 
@@ -219,6 +226,7 @@ def compute_forward_returns(
 
     # 3. Vol-normalize forward returns
     forward_returns_norm = forward_returns / volatility
+    forward_returns_norm = forward_returns_norm.clip(lower=-target_clip, upper=target_clip)
 
     # 4. Convert to long format
     forward_long = forward_returns_norm.stack()
@@ -245,6 +253,7 @@ def prepare_alpha_training_data(
     spans: List[int] = [2, 4, 8, 16, 32, 64],
     vol_span: int = 128,
     base_interval_hours: int = BASE_INTERVAL_HOURS,
+    min_history_hours: int | None = None,
 ) -> Tuple[pd.DataFrame, pd.Series, pd.Series]:
     """
     Prepare complete feature matrix X and target vector y for alpha training.
@@ -318,6 +327,21 @@ def prepare_alpha_training_data(
     funding_aligned = funding_features.loc[common_index]
     y_aligned = forward_returns.loc[common_index]
     vol_aligned = volatility.loc[common_index]
+
+    if min_history_hours is None:
+        min_history_hours = vol_span
+    min_history_bars = _hours_to_bars(min_history_hours, base_interval_hours)
+
+    history_counts = momentum_aligned.groupby(level='asset').cumcount()
+    history_mask = history_counts >= min_history_bars
+
+    momentum_aligned = momentum_aligned[history_mask]
+    funding_aligned = funding_aligned[history_mask]
+    y_aligned = y_aligned[history_mask]
+    vol_aligned = vol_aligned[history_mask]
+
+    if momentum_aligned.empty:
+        raise ValueError("No samples remain after enforcing minimum history requirement.")
 
     # 5. Concatenate momentum and funding features
     X = pd.concat([momentum_aligned, funding_aligned], axis=1)
