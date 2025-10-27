@@ -14,6 +14,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - `docs/volume_weighted_pca_research.md` - Research on volume weighting methodologies
 - `docs/volume_weighted_pca_implementation.md` - Implementation details for volume-weighted PCA
 - `docs/QUICKSTART_VOLUME_PCA.md` - Practical guide for H* optimization workflow
+- `docs/GRADIENT.md` - Gradient companion strategy overview and workflow ✨ NEW
 
 This context is essential for understanding the research goals, implementation decisions, and current state of the framework.
 
@@ -90,6 +91,7 @@ The project uses a `src/` layout with `uv` for dependency management, separating
 ### Directory Structure
 
 - **`src/slipstream/`**: Trading logic and strategy implementations (importable package)
+  - `common/` - Shared utilities (return normalization, volatility helpers) ✨ **NEW**
   - `signals/` - Signal generation functions (single source of truth for alpha models)
     - `base.py` - Base interfaces and validation functions
     - `pca_momentum.py` - PCA-based idiosyncratic momentum signals
@@ -104,6 +106,11 @@ The project uses a `src/` layout with `uv` for dependency management, separating
     - `costs.py` - Transaction cost modeling (power-law impact)
     - `backtest.py` - Walk-forward simulation framework
     - `risk.py` - Covariance estimation and risk analytics
+  - `gradient/` - Gradient trend-following companion strategy ✨ **NEW**
+    - `signals.py` - Multi-horizon trend strength construction
+    - `portfolio.py` - Dollar-volatility balanced sizing
+    - `backtest.py` - Lightweight simulation + result helpers
+    - `cli.py` - Command-line entry points for signals/backtests
 - **`scripts/`**:
   - `data_load.py` - Data acquisition utility for downloading hourly OHLCV, funding, and return data
   - `fetch_s3_historical.py` - S3 historical data downloader (resumable, Oct 2023+)
@@ -112,6 +119,7 @@ The project uses a `src/` layout with `uv` for dependency management, separating
   - `find_optimal_H_alpha.py` - Alpha model H* search (trains models across horizons)
   - `find_optimal_H_funding.py` - Funding model H* search
   - `find_optimal_H_joint.py` - **Joint optimization** (trains both models simultaneously) ✨ **NEW**
+  - `gradient_compute_signals.py` / `gradient_run_backtest.py` - Gradient CLI wrappers ✨ **NEW**
 - **`notebooks/`**: Research and backtesting analysis
 - **`data/`**: (git-ignored)
   - `market_data/` - Raw market data CSVs (candles, funding, merged returns)
@@ -125,9 +133,9 @@ The project uses a `src/` layout with `uv` for dependency management, separating
 
 **`scripts/data_load.py`** - Market data acquisition:
 - `fetch_all_perp_markets()` - Enumerates all perp dex namespaces and unions their live universes
-- `fetch_candles_1h()` - Paginates 1h candles in 120-day chunks to stay under API limits (~5k candles)
+- `fetch_candles()` - Paginates 4h candles in 120-day chunks to stay under API limits (~5k candles)
 - `fetch_funding_hourly()` - Fetches hourly funding data with pagination
-- `compute_hourly_log_returns()` - Vectorized computation of hourly log returns from 1h close prices
+- `compute_log_returns()` - Vectorized computation of 4h log returns from close prices
 - `build_datasets()` - Orchestrates fetching candles+funding, computing returns, aligning, and writing CSVs to `data/market_data/`
 - `build_for_universe()` - Fetches and writes datasets for all live markets (with optional dex filtering)
 
@@ -171,8 +179,8 @@ The project implements retry logic with exponential backoff for retryable HTTP s
 
 1. Fetch candles and funding data in parallel using `asyncio.gather()`
 2. Compute log returns: `log_returns = np.log1p(candles["close"].pct_change())`
-3. Create aligned hourly index and join all datasets
-4. Write three CSV outputs: `{prefix}_{coin}_candles_1h.csv`, `{prefix}_{coin}_funding_1h.csv`, `{prefix}_{coin}_merged_1h.csv`
+3. Create aligned 4-hour index and join all datasets
+4. Write three CSV outputs: `{prefix}_{coin}_candles_4h.csv`, `{prefix}_{coin}_funding_4h.csv`, `{prefix}_{coin}_merged_4h.csv`
 
 ## Joint H* Optimization Results
 

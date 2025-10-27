@@ -37,10 +37,10 @@ def load_all_returns(data_dir: Path, pattern: str = "*_candles_4h.csv") -> pd.Da
 
     returns_dict = {}
     for fpath in files:
-        # Extract coin name from filename pattern: COIN_candles_1h.csv
+        # Extract coin name from filename pattern: COIN_candles_4h.csv
         parts = fpath.stem.split("_")
         if len(parts) >= 3 and parts[-2] == "candles":
-            coin = "_".join(parts[:-2])  # e.g., BTC from BTC_candles_1h.csv
+            coin = "_".join(parts[:-2])  # e.g., BTC from BTC_candles_4h.csv
         else:
             coin = fpath.stem
 
@@ -67,7 +67,7 @@ def load_all_returns(data_dir: Path, pattern: str = "*_candles_4h.csv") -> pd.Da
     return returns_wide
 
 
-def load_volume_data(data_dir: Path, pattern: str = "*_candles_1h.csv") -> pd.DataFrame:
+def load_volume_data(data_dir: Path, pattern: str = "*_candles_4h.csv") -> pd.DataFrame:
     """
     Load volume data from candle files and construct wide volume matrix.
 
@@ -85,10 +85,10 @@ def load_volume_data(data_dir: Path, pattern: str = "*_candles_1h.csv") -> pd.Da
 
     volume_dict = {}
     for fpath in files:
-        # Extract coin name from filename pattern: COIN_candles_1h.csv
+        # Extract coin name from filename pattern: COIN_candles_4h.csv
         parts = fpath.stem.split("_")
         if len(parts) >= 3 and parts[-2] == "candles":
-            coin = "_".join(parts[:-2])  # e.g., BTC from BTC_candles_1h.csv
+            coin = "_".join(parts[:-2])  # e.g., BTC from BTC_candles_4h.csv
         else:
             coin = fpath.stem
 
@@ -109,7 +109,7 @@ def load_volume_data(data_dir: Path, pattern: str = "*_candles_1h.csv") -> pd.Da
     volumes_wide.index = pd.to_datetime(volumes_wide.index, utc=True)
     volumes_wide = volumes_wide.sort_index()
 
-    print(f"Loaded volume matrix: {volumes_wide.shape[0]} hours × {volumes_wide.shape[1]} assets")
+    print(f"Loaded volume matrix: {volumes_wide.shape[0]} periods × {volumes_wide.shape[1]} assets")
     print(f"Date range: {volumes_wide.index[0]} to {volumes_wide.index[-1]}")
 
     return volumes_wide
@@ -182,24 +182,24 @@ def compute_volume_weights(
     return weights
 
 
-def resample_returns(returns_1h: pd.DataFrame, freq: str = "D") -> pd.DataFrame:
+def resample_returns(returns: pd.DataFrame, freq: str = "D") -> pd.DataFrame:
     """
-    Aggregate hourly returns to specified frequency.
+    Aggregate base-grid returns (default 4-hour) to a coarser frequency.
 
-    For each asset, sum hourly log returns within each period.
-    Only compute period return if at least one hourly return exists.
+    For each asset, sum log returns within each period.
+    Only compute period return if at least one observation exists.
 
     Args:
-        returns_1h: Hourly returns DataFrame
-        freq: Pandas frequency string - "H" (hourly), "4H", "6H", "12H", "D" (daily), "W" (weekly)
+        returns: Returns DataFrame on the base grid (4h by default)
+        freq: Pandas frequency string - "4H", "6H", "12H", "D" (daily), "W" (weekly)
     """
     # Use UTC period boundaries
-    resampled = returns_1h.groupby(pd.Grouper(freq=freq)).sum()
+    resampled = returns.groupby(pd.Grouper(freq=freq)).sum()
 
-    # Count valid (non-NaN) hourly observations per period
-    counts = returns_1h.groupby(pd.Grouper(freq=freq)).count()
+    # Count valid (non-NaN) observations per period
+    counts = returns.groupby(pd.Grouper(freq=freq)).count()
 
-    # Set period return to NaN if no valid hourly returns
+    # Set period return to NaN if no valid returns
     resampled = resampled.where(counts > 0, np.nan)
 
     print(f"Resampled to {freq}: {resampled.shape[0]} periods × {resampled.shape[1]} assets")
@@ -207,14 +207,14 @@ def resample_returns(returns_1h: pd.DataFrame, freq: str = "D") -> pd.DataFrame:
     return resampled
 
 
-def resample_to_daily(returns_1h: pd.DataFrame) -> pd.DataFrame:
+def resample_to_daily(returns: pd.DataFrame) -> pd.DataFrame:
     """
-    Aggregate hourly returns to daily log returns.
+    Aggregate base-grid returns to daily log returns.
 
-    DEPRECATED: Use resample_returns(returns_1h, freq="D") instead.
+    DEPRECATED: Use resample_returns(returns, freq="D") instead.
     Kept for backward compatibility.
     """
-    return resample_returns(returns_1h, freq="D")
+    return resample_returns(returns, freq="D")
 
 
 def compute_rolling_pca_loadings(

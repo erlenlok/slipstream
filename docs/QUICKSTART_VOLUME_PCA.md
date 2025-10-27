@@ -32,7 +32,7 @@ ls data/market_data/*.csv | wc -l
 # Expected: ~417 files (139 assets × 3 file types each)
 
 # Verify volume data exists
-head -3 data/market_data/BTC_candles_1h.csv
+head -3 data/market_data/BTC_candles_4h.csv
 # Should show: datetime,open,high,low,close,volume
 ```
 
@@ -254,7 +254,7 @@ python scripts/find_optimal_horizon.py --H 18 20 22 24 26 28 30 --K 30
 
 ## Troubleshooting
 
-### "No files matching *_candles_1h.csv found"
+### "No files matching *_candles_4h.csv found"
 - Data download incomplete
 - Check: `ls data/market_data/*.csv | wc -l` should show ~417 files
 

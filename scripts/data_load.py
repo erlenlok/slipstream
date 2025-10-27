@@ -147,7 +147,7 @@ async def fetch_candles(
     coin: str,
     start: datetime,
     end: datetime,
-    interval: str = "1h",
+    interval: str = "4h",
 ) -> pd.DataFrame:
     """Paginate candles in chunks to stay under ~5k-candle caps.
 
@@ -155,10 +155,10 @@ async def fetch_candles(
         interval: "1h" or "4h" (API supports 1m, 5m, 15m, 1h, 4h, 1d)
     """
     # Adjust chunk size based on interval to stay under 5000 candle limit
-    if interval == "1h":
-        chunk_days = 120  # 120*24=2880 < 5000
-    elif interval == "4h":
+    if interval == "4h":
         chunk_days = 500  # 500*24/4=3000 < 5000
+    elif interval == "1h":
+        chunk_days = 120  # 120*24=2880 < 5000
     else:
         chunk_days = 120  # Conservative default
 
@@ -248,7 +248,7 @@ async def fetch_funding_hourly(
 
 
 def compute_log_returns(candles: pd.DataFrame) -> pd.DataFrame:
-    """Vectorized log returns from close prices."""
+    """Vectorized log returns from 4-hour close prices."""
     log_returns = np.log1p(candles["close"].pct_change())
     return log_returns.to_frame(name="ret")
 
@@ -259,7 +259,7 @@ async def build_datasets(
     start: datetime,
     end: datetime,
     out_prefix: str,
-    interval: str = "1h",
+    interval: str = "4h",
 ) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
     """Fetch candles+funding, compute returns, align, and write CSVs to market_data/."""
     candles, funding = await asyncio.gather(
@@ -270,7 +270,7 @@ async def build_datasets(
 
     # Resample both to common grid aligned to epoch (UTC midnight)
     # This ensures candles and funding are on the same timestamps
-    freq = interval if interval in ["1h", "4h"] else "1h"
+    freq = interval if interval in ["1h", "4h"] else "4h"
 
     # Resample candles (use last for OHLCV)
     candles_resampled = candles.resample(freq, origin='epoch', offset='0h').agg({
@@ -293,9 +293,9 @@ async def build_datasets(
     aligned = pd.DataFrame(index=common_index).join(rets_resampled, how="left").join(funding_resampled, how="left")
 
     # Save resampled data
-    candles_resampled.to_csv(f"{out_prefix}/market_data/{coin}_candles_{interval}.csv", index=True)
-    funding_resampled.to_csv(f"{out_prefix}/market_data/{coin}_funding_{interval}.csv", index=True)
-    aligned.to_csv(f"{out_prefix}/market_data/{coin}_merged_{interval}.csv", index=True)
+    candles_resampled.to_csv(f"{out_prefix}/market_data/{coin}_candles_{freq}.csv", index=True)
+    funding_resampled.to_csv(f"{out_prefix}/market_data/{coin}_funding_{freq}.csv", index=True)
+    aligned.to_csv(f"{out_prefix}/market_data/{coin}_merged_{freq}.csv", index=True)
 
     return candles_resampled, funding_resampled, aligned
 
@@ -304,7 +304,7 @@ async def build_for_universe(
     start: datetime,
     end: datetime,
     out_prefix: str,
-    interval: str = "1h",
+    interval: str = "4h",
     dex_filter: str | None = None,
 ) -> None:
     """Fetch & write datasets for all live markets (optionally filter by dex name)."""
@@ -336,7 +336,7 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--coin", type=str, default="", help="Single market symbol (e.g., BTC). If empty and --all not set, prints markets.")
     p.add_argument("--all", action="store_true", help="Fetch for all live perp markets.")
     p.add_argument("--dex", type=str, default=None, help="Filter to a specific dex namespace (use with --all).")
-    p.add_argument("--interval", type=str, default="1h", choices=["1h", "4h"], help="Candle interval: 1h or 4h (default: 1h).")
+    p.add_argument("--interval", type=str, default="4h", choices=["1h", "4h"], help="Candle interval: 4h (default) or 1h.")
     p.add_argument("--days", type=int, default=180, help="Lookback window in days (default: 180).")
     p.add_argument("--start", type=str, default=None, help="ISO start (UTC). Overrides --days if set.")
     p.add_argument("--end", type=str, default=None, help="ISO end (UTC). Defaults to now.")

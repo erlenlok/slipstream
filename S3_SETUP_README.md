@@ -4,7 +4,7 @@ This README gets you set up to download full historical data from Hyperliquid's 
 
 ## The Problem
 
-Hyperliquid's API only provides ~5,000 recent candles (~7 months for 1h data). For serious backtesting, you need years of data.
+Hyperliquid's API only provides ~5,000 recent candles (~2.3 years for 4h data). For serious backtesting, you need years of data.
 
 ## The Solution
 
@@ -104,15 +104,19 @@ tail -f s3_download.log
 Candles saved to:
 ```
 data/s3_historical/candles/
-    BTC_candles_1h.csv
-    ETH_candles_1h.csv
-    SOL_candles_1h.csv
+    BTC_candles_4h.csv
+    ETH_candles_4h.csv
+    SOL_candles_4h.csv
     ...
+    hourly/                 # intermediate hourly candles (used for resampling)
+        BTC_candles_1h.csv
+        ETH_candles_1h.csv
+        ...
 ```
 
 Format: `datetime,open,high,low,close,volume`
 
-Note: `volume` will be NaN (L2 snapshots don't have volume)
+Note: `volume` will be NaN (L2 snapshots don't have volume). Hourly files are kept only as intermediates; the strategy consumes the 4h aggregates.
 
 ## Cost
 

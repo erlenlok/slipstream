@@ -92,10 +92,10 @@ Merge S3 + API data in your notebooks:
 ```python
 import pandas as pd
 
-# Load both sources
-s3_candles = pd.read_csv('data/s3_historical/candles/BTC_candles_1h.csv',
+# Load both sources (4-hour bars)
+s3_candles = pd.read_csv('data/s3_historical/candles/BTC_candles_4h.csv',
                           parse_dates=['datetime'])
-api_candles = pd.read_csv('data/market_data/BTC_candles_1h.csv',
+api_candles = pd.read_csv('data/market_data/BTC_candles_4h.csv',
                            parse_dates=['datetime'])
 
 # Merge (S3 has older data, API has recent)

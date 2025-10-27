@@ -177,7 +177,7 @@ After backtesting with the beta-neutral strategy:
 ### New Functions to Add
 
 ```python
-def load_volume_data(data_dir: Path, pattern: str = "*_candles_1h.csv") -> pd.DataFrame:
+def load_volume_data(data_dir: Path, pattern: str = "*_candles_4h.csv") -> pd.DataFrame:
     """Load volume data from candle files and construct wide matrix."""
     # Load all candle files
     # Extract volume column

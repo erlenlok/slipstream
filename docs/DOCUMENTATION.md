@@ -1,5 +1,9 @@
 # Slipstream Documentation
 
+> **Note:** A lightweight companion strategy named *Gradient* now lives under
+> `src/slipstream/gradient`. See `docs/GRADIENT.md` for its workflow, CLI
+> commands, and implementation details.
+
 # Slipstream: Strategy Specification
 
 ## 1. Executive Summary
@@ -2291,7 +2295,7 @@ First, check where your API data ends:
 
 ```bash
 # Check most recent API candle
-head -5 data/market_data/BTC_candles_1h.csv
+head -5 data/market_data/BTC_candles_4h.csv
 ```
 
 You want S3 data to cover the period BEFORE your API data starts.
@@ -2321,8 +2325,8 @@ python scripts/fetch_s3_historical.py \
 **The script will:**
 1. Check `data/s3_historical/progress/download_state.json` for already-processed items
 2. Download one L2 snapshot file at a time
-3. Parse mid-prices and create 1h OHLCV candle
-4. Append to `data/s3_historical/candles/{COIN}_candles_1h.csv`
+3. Parse mid-prices and create 1h OHLCV intermediates
+4. Resample to 4h and append to `data/s3_historical/candles/{COIN}_candles_4h.csv`
 5. Delete the raw L2 file immediately
 6. Update progress tracker
 7. Repeat for all hours and all coins
@@ -2349,15 +2353,19 @@ S3 candles are saved in the same format as API candles:
 ```
 data/s3_historical/
   candles/
-    BTC_candles_1h.csv   # datetime,open,high,low,close,volume
-    ETH_candles_1h.csv
-    SOL_candles_1h.csv
+    BTC_candles_4h.csv   # datetime,open,high,low,close,volume
+    ETH_candles_4h.csv
+    SOL_candles_4h.csv
     ...
+    hourly/              # intermediate 1h candles kept for resampling
+      BTC_candles_1h.csv
+      ETH_candles_1h.csv
+      ...
   progress/
     download_state.json  # Resumption state
 ```
 
-**Note:** `volume` column will be NaN since L2 snapshots don't contain trade volume.
+**Note:** `volume` column will be NaN since L2 snapshots don't contain trade volume. The `hourly/` subdirectory is maintained only for resampling; downstream workflows should consume the 4h aggregates.
 
 ## Merging with API Data
 
@@ -2365,8 +2373,8 @@ Once you have both S3 historical data and API recent data, merge them:
 
 ```python
 # Load both
-s3_candles = pd.read_csv('data/s3_historical/candles/BTC_candles_1h.csv', parse_dates=['datetime'])
-api_candles = pd.read_csv('data/market_data/BTC_candles_1h.csv', parse_dates=['datetime'])
+s3_candles = pd.read_csv('data/s3_historical/candles/BTC_candles_4h.csv', parse_dates=['datetime'])
+api_candles = pd.read_csv('data/market_data/BTC_candles_4h.csv', parse_dates=['datetime'])
 
 # Concatenate and deduplicate
 combined = pd.concat([s3_candles, api_candles]).drop_duplicates(subset=['datetime']).sort_values('datetime')

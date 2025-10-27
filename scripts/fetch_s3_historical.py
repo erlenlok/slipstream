@@ -3,14 +3,14 @@
 Fetch Hyperliquid S3 historical L2 book data and convert to OHLCV candles.
 
 This script downloads L2 orderbook snapshots from Hyperliquid's S3 archive,
-processes them into 1-hour OHLCV candles, and immediately discards raw data
+processes them into 4-hour OHLCV candles (via hourly intermediates), and immediately discards raw data
 to minimize disk usage. It's resumable - tracks progress and skips already
 processed data.
 
 Architecture:
     1. Download single L2 snapshot file (per hour per asset)
     2. Parse to extract mid-prices
-    3. Aggregate to 1h OHLCV candle
+    3. Aggregate to 4h OHLCV candle
     4. Save candle to data/s3_historical/
     5. Delete raw L2 file immediately
     6. Update progress tracker
@@ -18,9 +18,11 @@ Architecture:
 Directory structure:
     data/s3_historical/
         candles/
-            BTC_candles_1h.csv
-            ETH_candles_1h.csv
+            BTC_candles_4h.csv
+            ETH_candles_4h.csv
             ...
+            hourly/
+                BTC_candles_1h.csv  # intermediate artifacts (for resampling)
         progress/
             download_state.json  # Tracks what's been processed
 
@@ -60,6 +62,7 @@ S3_MARKET_DATA_PREFIX = "market_data"
 PROJECT_ROOT = Path(__file__).parent.parent
 S3_DATA_DIR = PROJECT_ROOT / "data" / "s3_historical"
 S3_CANDLES_DIR = S3_DATA_DIR / "candles"
+S3_HOURLY_DIR = S3_CANDLES_DIR / "hourly"
 S3_PROGRESS_DIR = S3_DATA_DIR / "progress"
 API_DATA_DIR = PROJECT_ROOT / "data" / "market_data"
 
@@ -227,7 +230,7 @@ def parse_l2_snapshot_to_candle(lz4_path: Path, coin: str, date_hour: datetime) 
 
 def append_candle_to_csv(coin: str, candle: dict[str, Any]):
     """Append a single candle to the coin's CSV file."""
-    csv_path = S3_CANDLES_DIR / f"{coin}_candles_1h.csv"
+    csv_path = S3_HOURLY_DIR / f"{coin}_candles_1h.csv"
 
     # Create DataFrame for this candle
     df = pd.DataFrame([candle])
@@ -236,7 +239,7 @@ def append_candle_to_csv(coin: str, candle: dict[str, Any]):
     if csv_path.exists():
         df.to_csv(csv_path, mode='a', header=False, index=False)
     else:
-        S3_CANDLES_DIR.mkdir(parents=True, exist_ok=True)
+        csv_path.parent.mkdir(parents=True, exist_ok=True)
         df.to_csv(csv_path, index=False)
 
 
@@ -294,8 +297,8 @@ def get_coin_list() -> list[str]:
         return []
 
     coins = set()
-    for f in API_DATA_DIR.glob("*_candles_1h.csv"):
-        coin = f.stem.replace("_candles_1h", "")
+    for f in API_DATA_DIR.glob("*_candles_4h.csv"):
+        coin = f.stem.replace("_candles_4h", "")
         coins.add(coin)
 
     return sorted(coins)
@@ -320,8 +323,8 @@ def validate_against_api_data(coin: str):
 
     Compares close prices in the overlapping time range to ensure data quality.
     """
-    api_file = API_DATA_DIR / f"{coin}_candles_1h.csv"
-    s3_file = S3_CANDLES_DIR / f"{coin}_candles_1h.csv"
+    api_file = API_DATA_DIR / f"{coin}_candles_4h.csv"
+    s3_file = S3_CANDLES_DIR / f"{coin}_candles_4h.csv"
 
     if not api_file.exists() or not s3_file.exists():
         print(f"  Skipping {coin}: missing files")
@@ -360,6 +363,43 @@ def validate_against_api_data(coin: str):
         print(f"    ⚠️  WARNING: Large price discrepancy detected!")
     else:
         print(f"    ✓ Validation passed")
+
+
+def resample_hourly_to_4h(coins: list[str]):
+    """Convert intermediate 1h candles into 4h aggregates."""
+    if not S3_HOURLY_DIR.exists():
+        return
+
+    S3_CANDLES_DIR.mkdir(parents=True, exist_ok=True)
+
+    for coin in coins:
+        hourly_path = S3_HOURLY_DIR / f"{coin}_candles_1h.csv"
+        if not hourly_path.exists():
+            continue
+
+        df = pd.read_csv(hourly_path, parse_dates=["datetime"])
+        if df.empty:
+            continue
+
+        df = df.set_index("datetime").sort_index()
+        df = df[~df.index.duplicated(keep="last")]
+
+        resampler = df.resample("4h", origin="epoch", offset="0h")
+        agg = pd.DataFrame({
+            "open": resampler["open"].first(),
+            "high": resampler["high"].max(),
+            "low": resampler["low"].min(),
+            "close": resampler["close"].last(),
+            "volume": resampler["volume"].sum(min_count=1),
+        })
+
+        agg = agg.dropna(how="all")
+        if agg.empty:
+            continue
+
+        out_path = S3_CANDLES_DIR / f"{coin}_candles_4h.csv"
+        agg.to_csv(out_path, index=True)
+        print(f"Resampled hourly candles to {out_path}")
 
 
 def main():
@@ -458,6 +498,7 @@ def main():
 
         # Final save
         progress.save()
+        resample_hourly_to_4h(coins)
 
         print(f"\n=== Summary ===")
         print(f"Completed: {completed_count}")

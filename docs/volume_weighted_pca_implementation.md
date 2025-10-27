@@ -9,7 +9,7 @@ The volume-weighted PCA feature has been successfully implemented in `scripts/bu
 ### 1. Data Loading Enhancement (`data_load.py`)
 
 **Changes**:
-- Updated `fetch_candles_1h()` to capture full OHLCV data: `open`, `high`, `low`, `close`, `volume`
+- Updated `fetch_candles()` to capture full OHLCV data at 4-hour resolution: `open`, `high`, `low`, `close`, `volume`
 - Previously only captured `close` price
 - Doubled API friendliness: `REQUEST_PAUSE_SECONDS` = 0.5s (was 0.25s)
 - Initial retry delay = 1.0s (was 0.5s)
@@ -21,7 +21,7 @@ The volume-weighted PCA feature has been successfully implemented in `scripts/bu
 
 **New Functions**:
 
-#### `load_volume_data(data_dir, pattern="*_candles_1h.csv")`
+#### `load_volume_data(data_dir, pattern="*_candles_4h.csv")`
 - Loads volume from all candle files
 - Returns wide DataFrame (hours × assets)
 - Handles missing data gracefully

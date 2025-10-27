@@ -34,16 +34,19 @@ This is fundamentally a **funding carry strategy** where momentum adds value pri
 - ✅ **Timescale-Matched PCA**: Factor decomposition adapts to holding period H
 - ✅ **EWMA Momentum Signals**: Multi-span idiosyncratic momentum features
 - ✅ **Volume-Weighted PCA**: Three weighting methods (sqrt, log, sqrt_dollar)
+- ✅ **Gradient Companion Strategy**: Balanced trend-following overlay built on shared tooling ✨ NEW
 
 ## 📊 Repo Layout
 
 ```
 slipstream/
 ├── src/slipstream/              # Importable Python package
+│   ├── common/                  # Shared utilities (returns, volatility)
 │   ├── signals/                 # Signal generation (EWMA momentum, PCA)
 │   ├── alpha/                   # Price alpha model training
 │   ├── funding/                 # Funding rate prediction
-│   └── portfolio/               # Portfolio optimization & backtesting ✨ NEW
+│   ├── portfolio/               # Portfolio optimization & backtesting ✨ NEW
+│   └── gradient/                # Gradient trend strategy modules ✨ NEW
 │       ├── optimizer.py         # Beta-neutral optimizer
 │       ├── costs.py             # Transaction cost model
 │       ├── backtest.py          # Walk-forward simulation
@@ -55,10 +58,13 @@ slipstream/
 │   ├── find_optimal_horizon.py  # PCA timescale matching
 │   ├── find_optimal_H_alpha.py  # Alpha model H* search
 │   ├── find_optimal_H_funding.py # Funding model H* search
-│   └── find_optimal_H_joint.py  # Joint optimization ✨ NEW
+│   ├── find_optimal_H_joint.py  # Joint optimization ✨ NEW
+│   ├── gradient_compute_signals.py # Gradient trend strength CLI ✨ NEW
+│   └── gradient_run_backtest.py # Gradient backtest CLI ✨ NEW
 ├── notebooks/                   # Research & analysis
 ├── docs/                        # Documentation
 │   ├── DOCUMENTATION.md         # Consolidated documentation
+│   ├── GRADIENT.md              # Gradient overview & workflow ✨ NEW
 │   └── archive/                 # Deprecated documentation files
 ├── data/                        # Data storage (git-ignored)
 │   ├── market_data/             # API data (candles, funding, returns)
@@ -69,6 +75,10 @@ slipstream/
 │       └── joint_models/        # Joint optimization results ✨ NEW
 └── tests/                       # Unit tests
 ```
+
+## 🌈 Gradient Strategy
+
+Looking for a simpler trend overlay without the full alpha + funding stack? The new [Gradient strategy](docs/GRADIENT.md) keeps equal dollar-volatility long and short books in the assets with the strongest directional trends. Generate signals with `uv run gradient-signals` and backtest with `uv run gradient-backtest`.
 
 ## 🏁 Quick Start
 
