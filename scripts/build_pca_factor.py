@@ -16,7 +16,7 @@ from pathlib import Path
 
 import numpy as np
 import pandas as pd
-def load_all_returns(data_dir: Path, pattern: str = "*_merged_1h.csv") -> pd.DataFrame:
+def load_all_returns(data_dir: Path, pattern: str = "*_candles_4h.csv") -> pd.DataFrame:
     """
     Load all candle files and compute returns on the fly.
 
@@ -25,7 +25,7 @@ def load_all_returns(data_dir: Path, pattern: str = "*_merged_1h.csv") -> pd.Dat
         NaN for missing/invalid returns.
     """
     # Convert merged pattern to candles pattern
-    candles_pattern = pattern.replace("_merged_", "_candles_")
+    candles_pattern = pattern
 
     # Look in market_data subdirectory
     market_data_dir = data_dir / "market_data"
@@ -671,14 +671,13 @@ def main() -> None:
     args = parse_args()
 
     # Construct patterns based on interval
-    merged_pattern = f"*_merged_{args.interval}.csv"
     candles_pattern = f"*_candles_{args.interval}.csv"
 
-    # Load all returns
-    returns_1h = load_all_returns(args.data_dir, pattern=merged_pattern)
+    # Load all returns using candle data
+    returns_base = load_all_returns(args.data_dir, pattern=candles_pattern)
 
     # Resample to specified frequency
-    returns_resampled = resample_returns(returns_1h, freq=args.freq)
+    returns_resampled = resample_returns(returns_base, freq=args.freq)
 
     # Convert window from hours to number of periods based on frequency
     # Parse frequency string to get period length in hours

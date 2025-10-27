@@ -357,6 +357,8 @@ def main():
                         return int(obj)
                     elif isinstance(obj, (np.float64, np.float32, np.float16)):
                         return float(obj)
+                    elif isinstance(obj, pd.DataFrame):
+                        return obj.to_dict(orient='records')
                     elif isinstance(obj, dict):
                         return {k: convert_to_python(v) for k, v in obj.items()}
                     elif isinstance(obj, list):

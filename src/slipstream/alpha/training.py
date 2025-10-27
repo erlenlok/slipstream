@@ -13,7 +13,9 @@ Reference: docs/ALPHA_MODEL_TRAINING.md Section 4-6
 import numpy as np
 import pandas as pd
 from sklearn.linear_model import Ridge, RidgeCV
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Tuple
+
+import pandas as pd
 
 
 def find_optimal_lambda(
@@ -171,6 +173,7 @@ def walk_forward_cv(
     predictions_oos = []
     actuals_oos = []
     fold_r2 = []
+    oos_indices: List[pd.MultiIndex] = []
 
     for i in range(n_splits):
         # Validation window
@@ -204,6 +207,7 @@ def walk_forward_cv(
         # Store results
         predictions_oos.append(y_pred)
         actuals_oos.append(y_val.values)
+        oos_indices.append(y_val.index)
 
         # Calculate fold R²
         ss_res = np.sum((y_val.values - y_pred) ** 2)
@@ -232,6 +236,53 @@ def walk_forward_cv(
         'mean_fold_r2': np.mean(fold_r2),
         'std_fold_r2': np.std(fold_r2)
     }
+
+
+def _compute_quantile_statistics(
+    predictions: np.ndarray,
+    actuals: np.ndarray,
+    n_quantiles: int = 10
+) -> pd.DataFrame:
+    """Return mean realized value and t-stats per prediction quantile."""
+    if len(predictions) == 0:
+        return pd.DataFrame(
+            columns=["quantile", "count", "pred_mean", "actual_mean", "actual_tstat"]
+        )
+
+    df = pd.DataFrame({"prediction": predictions, "actual": actuals})
+
+    # Handle duplicate edges by adding small noise fallback
+    try:
+        df["quantile"] = pd.qcut(df["prediction"], q=n_quantiles, labels=False, duplicates="drop")
+    except ValueError:
+        df["quantile"] = pd.cut(
+            df["prediction"],
+            bins=np.linspace(df["prediction"].min(), df["prediction"].max(), n_quantiles + 1),
+            labels=False,
+            include_lowest=True,
+        )
+
+    summary = (
+        df.groupby("quantile")
+        .apply(
+            lambda g: pd.Series({
+                "count": len(g),
+                "pred_mean": g["prediction"].mean(),
+                "actual_mean": g["actual"].mean(),
+                "actual_std": g["actual"].std(ddof=1),
+            })
+        )
+        .reset_index()
+    )
+
+    summary["actual_tstat"] = summary.apply(
+        lambda row: row["actual_mean"] / (row["actual_std"] / np.sqrt(row["count"]))
+        if row["actual_std"] and row["count"] > 1 else np.nan,
+        axis=1,
+    )
+    summary = summary.drop(columns=["actual_std"])
+    summary["quantile"] = summary["quantile"].astype(int)
+    return summary
 
 
 def train_alpha_model_complete(
@@ -309,6 +360,28 @@ def train_alpha_model_complete(
     n_sig = np.sum(np.abs(bootstrap_results['t_statistics']) > 1.96)
     print(f"Significant coefficients (|t|>1.96): {n_sig}/{len(X.columns)}")
 
+    quantile_stats = _compute_quantile_statistics(
+        cv_results['predictions_oos'],
+        cv_results['actuals_oos'],
+        n_quantiles=10
+    )
+
+    if not quantile_stats.empty:
+        print("\nQuantile analysis (prediction deciles):")
+        print(f"{'Quantile':>8} {'Count':>8} {'Pred µ':>10} {'Actual µ':>10} {'t-stat':>10} {'Sig':>5}")
+        print("-" * 52)
+        for _, row in quantile_stats.iterrows():
+            t = row["actual_tstat"]
+            sig = '***' if abs(t) > 2.58 else '**' if abs(t) > 1.96 else '*' if abs(t) > 1.64 else ''
+            print(
+                f"{int(row['quantile']):>8} "
+                f"{int(row['count']):>8} "
+                f"{row['pred_mean']:>10.4f} "
+                f"{row['actual_mean']:>10.4f} "
+                f"{t:>10.2f} {sig:>5}"
+            )
+        print("-" * 52)
+
     if r2_oos <= 0:
         print("⚠ WARNING: Out-of-sample R² ≤ 0 (no predictive power)")
     if correction / r2_in > 0.90 if r2_in > 0 else False:
@@ -329,5 +402,6 @@ def train_alpha_model_complete(
         'feature_names': X.columns.tolist(),
         'cv_results': cv_results,
         'bootstrap_results': bootstrap_results,
-        'n_significant': n_sig
+        'n_significant': n_sig,
+        'quantile_stats': quantile_stats
     }
