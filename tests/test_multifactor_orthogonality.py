@@ -150,7 +150,7 @@ def test_multifactor_orthogonality():
         print("✗ SOME TESTS FAILED - Check orthogonality implementation")
     print("=" * 70)
 
-    return all_passed
+    assert all_passed
 
 
 def test_variance_decomposition():
@@ -192,10 +192,10 @@ def test_variance_decomposition():
     if var_explained > 0.50:
         print("\n✓ Variance decomposition looks correct")
         print(f"  (Factor model explains {var_explained:.1%} of variance)")
-        return True
+        assert True
     else:
         print(f"\n✗ Unexpectedly low variance explained (expected > 50%, got {var_explained:.2%})")
-        return False
+        assert False
 
 
 if __name__ == "__main__":

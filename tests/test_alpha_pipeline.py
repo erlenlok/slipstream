@@ -7,7 +7,7 @@ from scripts.find_optimal_H_alpha import compute_market_factor_from_loadings
 
 
 def make_returns(rows: int = 6, assets: int = 2) -> pd.DataFrame:
-    index = pd.date_range("2024-01-01", periods=rows, freq=f"{BASE_INTERVAL_HOURS}H", tz="UTC")
+    index = pd.date_range("2024-01-01", periods=rows, freq=f"{BASE_INTERVAL_HOURS}h", tz="UTC")
     data = np.arange(rows * assets, dtype=float).reshape(rows, assets) / 100.0
     columns = [f"asset_{i}" for i in range(assets)]
     return pd.DataFrame(data, index=index, columns=columns)
@@ -35,7 +35,7 @@ def test_forward_returns_aggregates_correct_steps():
 
 
 def test_market_factor_projection_matches_dot_product():
-    returns_index = pd.date_range("2024-01-01", periods=4, freq="4H", tz="UTC")
+    returns_index = pd.date_range("2024-01-01", periods=4, freq="4h", tz="UTC")
     returns = pd.DataFrame(
         [
             [0.01, 0.02],

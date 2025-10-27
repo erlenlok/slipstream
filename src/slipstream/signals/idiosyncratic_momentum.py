@@ -21,7 +21,7 @@ BASE_INTERVAL_HOURS = 4
 
 def compute_idiosyncratic_returns(
     returns: pd.DataFrame,
-    pca_loadings: pd.DataFrame,
+    pca_loadings: pd.Series,
     market_factor: pd.Series,
 ) -> pd.DataFrame:
     """Compute idiosyncratic returns by removing market factor exposure.
@@ -32,20 +32,13 @@ def compute_idiosyncratic_returns(
     where epsilon is the idiosyncratic component we want to extract.
 
     Args:
-        returns: Wide DataFrame with timestamp index and asset columns containing returns
-        pca_loadings: Long DataFrame with (timestamp, asset) index and 'loading' column
-                      containing PC1 loadings (beta estimates)
-        market_factor: Series with timestamp index containing PC1 returns (R_m)
+        returns: Wide DataFrame with timestamp index and asset columns containing returns.
+        pca_loadings: Long Series with (timestamp, asset) MultiIndex and 'loading' values
+                      (beta estimates).
+        market_factor: Series with timestamp index containing PC1 returns (R_m).
 
     Returns:
-        Wide DataFrame with same shape as returns, containing idiosyncratic components
-
-    Example:
-        >>> returns = load_all_returns()  # Wide format
-        >>> pca_data = pd.read_csv('data/features/pca_factor_H24_K30_sqrt.csv')
-        >>> loadings = pca_data.set_index(['timestamp', 'asset'])['loading']
-        >>> market = pca_data.groupby('timestamp')['market_return'].first()
-        >>> idio_returns = compute_idiosyncratic_returns(returns, loadings, market)
+        Wide DataFrame with the same shape as returns, containing idiosyncratic components.
     """
     validate_returns_dataframe(returns, "returns")
 
@@ -169,12 +162,11 @@ def compute_multifactor_residuals(
 
 def idiosyncratic_momentum(
     returns: pd.DataFrame,
-    pca_loadings: pd.DataFrame,
+    pca_loadings: pd.Series,
     market_factor: pd.Series,
     spans: Optional[list[int]] = None,
     normalization: Literal['volatility', 'none'] = 'volatility',
     vol_span: Optional[int] = None,
-    base_interval_hours: int = BASE_INTERVAL_HOURS,
     clip: float = 2.5,
 ) -> pd.DataFrame:
     """Compute EWMA-based idiosyncratic momentum indicators.
@@ -188,40 +180,20 @@ def idiosyncratic_momentum(
     with shorter spans responding faster to changes and longer spans being smoother.
 
     Args:
-        returns: Wide DataFrame with timestamp index and asset columns
-        pca_loadings: Long DataFrame with (timestamp, asset, loading) for PC1 betas
-        market_factor: Series with timestamp index containing PC1 returns
+        returns: Wide DataFrame with timestamp index and asset columns.
+        pca_loadings: Long Series with (timestamp, asset) MultiIndex and 'loading' values (PC1 betas).
+        market_factor: Series with timestamp index containing PC1 returns.
         spans: List of EWMA span parameters (in hours) to compute momentum for.
-               Default: [2, 4, 8, 16, 32, 64] for multi-timescale panel
-        normalization: How to normalize the idiosyncratic returns before momentum calc
-            - 'volatility': Normalize returns by EWMA volatility before computing momentum (default)
-            - 'none': No normalization (raw EWMA on unnormalized returns)
-        vol_span: Span for volatility EWMA. If None, uses max(spans) * 2
+               Default: [2, 4, 8, 16, 32, 64] for multi-timescale panel.
+        normalization: How to normalize the idiosyncratic returns before momentum calc.
+            - 'volatility': Normalize returns by EWMA volatility before computing momentum (default).
+            - 'none': No normalization (raw EWMA on unnormalized returns).
+        vol_span: Span for volatility EWMA. If None, uses max(spans) * 2.
+        clip: Value to clip the momentum indicators at.
 
     Returns:
         Long DataFrame with (timestamp, asset, span) MultiIndex and 'momentum' column
-        containing the momentum indicator values. For example:
-            - idio_mom_2: Fast momentum (span=2)
-            - idio_mom_4: Medium-fast momentum (span=4)
-            - etc.
-
-    Example:
-        >>> returns = load_all_returns()
-        >>> pca_data = pd.read_csv('data/features/pca_factor_H24_K30_sqrt.csv')
-        >>> pca_data['timestamp'] = pd.to_datetime(pca_data['timestamp'])
-        >>> loadings = pca_data.set_index(['timestamp', 'asset'])['loading']
-        >>> market = pca_data.groupby('timestamp')['market_return'].first()
-        >>>
-        >>> # Compute panel of momentum indicators
-        >>> momentum = idiosyncratic_momentum(
-        ...     returns=returns,
-        ...     pca_loadings=loadings,
-        ...     market_factor=market,
-        ...     spans=[2, 4, 8, 16, 32],
-        ...     normalization='volatility'
-        ... )
-        >>>
-        >>> # Access specific momentum: momentum.xs(8, level='span') for idio_mom_8
+        containing the momentum indicator values.
     """
     validate_returns_dataframe(returns, "returns")
 
@@ -237,7 +209,7 @@ def idiosyncratic_momentum(
             vol_span = max(spans) * 2
 
         # EWMA volatility
-        vol_span_bars = max(1, int(round(vol_span / base_interval_hours)))
+        vol_span_bars = max(1, int(round(vol_span / BASE_INTERVAL_HOURS)))
         volatility = idio_returns.ewm(
             span=vol_span_bars,
             min_periods=vol_span_bars
@@ -256,7 +228,7 @@ def idiosyncratic_momentum(
 
     for span in spans:
         # EWMA of volatility-normalized idiosyncratic returns
-        span_bars = max(1, int(round(span / base_interval_hours)))
+        span_bars = max(1, int(round(span / BASE_INTERVAL_HOURS)))
         momentum = idio_returns_normalized.ewm(
             span=span_bars,
             min_periods=span_bars

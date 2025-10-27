@@ -268,16 +268,36 @@ async def build_datasets(
     )
     rets = compute_log_returns(candles)
 
-    # Use candle frequency for index (not always hourly for 4h data)
+    # Resample both to common grid aligned to epoch (UTC midnight)
+    # This ensures candles and funding are on the same timestamps
     freq = interval if interval in ["1h", "4h"] else "1h"
-    aligned_index = pd.date_range(start=start, end=end, freq=freq, tz=timezone.utc)
-    aligned = pd.DataFrame(index=aligned_index).join(rets, how="left").join(funding, how="left")
 
-    candles.to_csv(f"{out_prefix}/market_data/{coin}_candles_{interval}.csv", index=True)
-    funding.to_csv(f"{out_prefix}/market_data/{coin}_funding_{interval}.csv", index=True)
+    # Resample candles (use last for OHLCV)
+    candles_resampled = candles.resample(freq, origin='epoch', offset='0h').agg({
+        'open': 'first',
+        'high': 'max',
+        'low': 'min',
+        'close': 'last',
+        'volume': 'sum'
+    }).dropna(how='all')
+
+    # Recompute returns from resampled candles
+    rets_resampled = compute_log_returns(candles_resampled)
+
+    # Resample funding (average)
+    funding_resampled = funding.resample(freq, origin='epoch', offset='0h').mean().dropna(how='all')
+
+    # Use the resampled data's index for alignment (already grid-aligned)
+    # This ensures merged data matches candles/funding timestamps
+    common_index = rets_resampled.index.union(funding_resampled.index).sort_values()
+    aligned = pd.DataFrame(index=common_index).join(rets_resampled, how="left").join(funding_resampled, how="left")
+
+    # Save resampled data
+    candles_resampled.to_csv(f"{out_prefix}/market_data/{coin}_candles_{interval}.csv", index=True)
+    funding_resampled.to_csv(f"{out_prefix}/market_data/{coin}_funding_{interval}.csv", index=True)
     aligned.to_csv(f"{out_prefix}/market_data/{coin}_merged_{interval}.csv", index=True)
 
-    return candles, funding, aligned
+    return candles_resampled, funding_resampled, aligned
 
 
 async def build_for_universe(
