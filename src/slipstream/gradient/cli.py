@@ -8,6 +8,7 @@ import argparse
 from pathlib import Path
 from typing import Iterable, List, Optional
 
+import numpy as np
 import pandas as pd
 
 from slipstream.gradient import (

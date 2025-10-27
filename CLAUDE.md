@@ -122,8 +122,8 @@ The project uses a `src/` layout with `uv` for dependency management, separating
   - `gradient_compute_signals.py` / `gradient_run_backtest.py` - Gradient CLI wrappers ✨ **NEW**
 - **`notebooks/`**: Research and backtesting analysis
 - **`data/`**: (git-ignored)
-  - `market_data/` - Raw market data CSVs (candles, funding, merged returns)
-  - `s3_historical/` - S3 historical archive (Oct 2023+)
+  - `market_data/` - Raw market data CSVs from API (candles, funding, merged returns) - **PRIMARY DATA SOURCE**
+  - `s3_historical/` - S3 historical archive (Oct 2023+) - **ONLY FOR COST MODEL CALIBRATION, NOT BACKTESTING**
   - `features/` - Computed features
     - `alpha_models/` - Trained alpha models
     - `funding_models/` - Trained funding models
