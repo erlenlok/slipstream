@@ -292,7 +292,8 @@ def train_alpha_model_complete(
     n_bootstrap: int = 1000,
     alphas: List[float] = [0.001, 0.01, 0.1, 1.0, 10.0, 100.0],
     cv_folds: int = 10,
-    n_cv_splits: int = 10
+    n_cv_splits: int = 10,
+    label: str = "ALPHA"
 ) -> Dict:
     """
     Complete alpha model training pipeline.
@@ -315,8 +316,9 @@ def train_alpha_model_complete(
     Returns:
         Complete model specification + diagnostics
     """
+    header = f"{label.upper()} MODEL TRAINING (H={H} hours)"
     print(f"\n{'='*70}")
-    print(f"ALPHA MODEL TRAINING (H={H} hours)")
+    print(header)
     print(f"{'='*70}\n")
 
     # Step 1: Find optimal λ
@@ -334,7 +336,7 @@ def train_alpha_model_complete(
     correction = r2_in - r2_oos
 
     print(f"\n{'='*70}")
-    print(f"FINAL MODEL SUMMARY (H={H})")
+    print(f"{label.upper()} MODEL SUMMARY (H={H})")
     print(f"{'='*70}")
     print(f"Regularization (λ):    {lambda_opt:.4f}")
     print(f"R² (in-sample):        {r2_in:.6f} ({r2_in*10000:.2f} bp)")
