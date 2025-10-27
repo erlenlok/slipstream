@@ -16,6 +16,8 @@ from typing import Optional, Literal
 
 from slipstream.signals.base import validate_returns_dataframe
 
+BASE_INTERVAL_HOURS = 4
+
 
 def compute_idiosyncratic_returns(
     returns: pd.DataFrame,
@@ -172,6 +174,7 @@ def idiosyncratic_momentum(
     spans: Optional[list[int]] = None,
     normalization: Literal['volatility', 'none'] = 'volatility',
     vol_span: Optional[int] = None,
+    base_interval_hours: int = BASE_INTERVAL_HOURS,
 ) -> pd.DataFrame:
     """Compute EWMA-based idiosyncratic momentum indicators.
 
@@ -233,7 +236,11 @@ def idiosyncratic_momentum(
             vol_span = max(spans) * 2
 
         # EWMA volatility
-        volatility = idio_returns.ewm(span=vol_span, min_periods=vol_span // 2).std()
+        vol_span_bars = max(1, int(round(vol_span / base_interval_hours)))
+        volatility = idio_returns.ewm(
+            span=vol_span_bars,
+            min_periods=max(1, vol_span_bars // 2)
+        ).std()
         # Avoid division by zero
         volatility = volatility.replace(0, np.nan)
 
@@ -248,7 +255,11 @@ def idiosyncratic_momentum(
 
     for span in spans:
         # EWMA of volatility-normalized idiosyncratic returns
-        momentum = idio_returns_normalized.ewm(span=span, min_periods=span // 2).mean()
+        span_bars = max(1, int(round(span / base_interval_hours)))
+        momentum = idio_returns_normalized.ewm(
+            span=span_bars,
+            min_periods=max(1, span_bars // 2)
+        ).mean()
 
         # Convert to long format and store
         momentum_long = momentum.stack()
