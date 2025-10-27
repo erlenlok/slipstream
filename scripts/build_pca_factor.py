@@ -16,9 +16,6 @@ from pathlib import Path
 
 import numpy as np
 import pandas as pd
-from sklearn.decomposition import PCA
-
-
 def load_all_returns(data_dir: Path, pattern: str = "*_merged_1h.csv") -> pd.DataFrame:
     """
     Load all candle files and compute returns on the fly.
@@ -226,6 +223,10 @@ def compute_rolling_pca_loadings(
     min_assets: int = 10,
     min_periods: int = 30,
     n_components: int = 1,
+    ridge_epsilon: float = 1e-6,
+    min_eigenvalue: float = 1e-8,
+    min_loading_norm: float = 1e-5,
+    anchor_asset: str = "BTC",
 ) -> pd.DataFrame:
     """
     Compute rolling PCA and extract PC loadings (market factor weights).
@@ -252,6 +253,8 @@ def compute_rolling_pca_loadings(
     # Pre-allocate output matrices - one per component
     loadings_matrices = [np.full((len(dates), len(assets)), np.nan) for _ in range(n_components)]
     variance_explained = np.full((len(dates), n_components), np.nan)
+    eigenvalues_record = np.full((len(dates), n_components), np.nan)
+    condition_numbers = np.full(len(dates), np.nan)
     n_assets_used = np.full(len(dates), 0, dtype=int)
 
     print(f"Computing rolling PCA with {window_days}-day window...")
@@ -279,28 +282,72 @@ def compute_rolling_pca_loadings(
             continue  # Insufficient data after cleaning
 
         # Fit PCA
+        matrix = window_clean.values
+        matrix = matrix - matrix.mean(axis=0, keepdims=True)
+
+        cov = np.cov(matrix, rowvar=False)
+        if np.isnan(cov).any():
+            cov = np.nan_to_num(cov)
+
+        cov += np.eye(cov.shape[0]) * ridge_epsilon
+
         try:
-            pca = PCA(n_components=n_components)
-            pca.fit(window_clean)
-
-            # Extract loadings for each component
-            for pc_idx in range(n_components):
-                pc_loadings = pca.components_[pc_idx]  # Shape: (n_valid_assets,)
-
-                # Map back to full asset list
-                asset_indices = [assets.get_loc(asset) for asset in valid_assets]
-                loadings_matrices[pc_idx][i, asset_indices] = pc_loadings
-
-            variance_explained[i, :] = pca.explained_variance_ratio_[:n_components]
-            n_assets_used[i] = len(valid_assets)
-
-            pca_computed += 1
-            if pca_computed % 100 == 0:
-                print(f"  Computed {pca_computed} PCAs (at date index {i + 1}/{len(dates)})")
-
-        except Exception as exc:
-            print(f"Warning: PCA failed on {date}: {exc}")
+            eigenvalues, eigenvectors = np.linalg.eigh(cov)
+        except np.linalg.LinAlgError as exc:
+            print(f"Warning: PCA eigendecomposition failed on {date}: {exc}")
             continue
+
+        order = np.argsort(eigenvalues)[::-1]
+        eigenvalues = eigenvalues[order]
+        eigenvectors = eigenvectors[:, order]
+
+        total_variance = eigenvalues.sum()
+        if total_variance <= 0:
+            continue
+
+        variance_ratio = eigenvalues / total_variance
+
+        condition_numbers[i] = (
+            eigenvalues[0] / eigenvalues[-1] if eigenvalues[-1] > 0 else np.inf
+        )
+
+        asset_indices = [assets.get_loc(asset) for asset in valid_assets]
+
+        skipped = False
+        for pc_idx in range(n_components):
+            eig = eigenvalues[pc_idx]
+            if eig < min_eigenvalue:
+                skipped = True
+                break
+
+            loadings = eigenvectors[:, pc_idx]
+            norm = np.linalg.norm(loadings)
+            if not np.isfinite(norm) or norm < min_loading_norm:
+                skipped = True
+                break
+
+            loadings = loadings / norm
+
+            if anchor_asset in valid_assets:
+                anchor_idx = valid_assets.get_loc(anchor_asset)
+                if loadings[anchor_idx] < 0:
+                    loadings = -loadings
+            else:
+                if loadings.sum() < 0:
+                    loadings = -loadings
+
+            loadings_matrices[pc_idx][i, asset_indices] = loadings
+            variance_explained[i, pc_idx] = variance_ratio[pc_idx]
+            eigenvalues_record[i, pc_idx] = eig
+
+        if skipped:
+            continue
+
+        n_assets_used[i] = len(valid_assets)
+
+        pca_computed += 1
+        if pca_computed % 100 == 0:
+            print(f"  Computed {pca_computed} PCAs (at date index {i + 1}/{len(dates)})")
 
     # Convert to DataFrame
     if n_components == 1:
@@ -324,6 +371,12 @@ def compute_rolling_pca_loadings(
         # Add variance explained for each component
         for pc_idx in range(n_components):
             loadings_df[f"_variance_explained_pc{pc_idx + 1}"] = variance_explained[:, pc_idx]
+
+    for pc_idx in range(n_components):
+        col_name = "_pc1_eigenvalue" if n_components == 1 else f"_eigenvalue_pc{pc_idx + 1}"
+        loadings_df[col_name] = eigenvalues_record[:, pc_idx]
+
+    loadings_df["_condition_number"] = condition_numbers
 
     # Add asset count metadata
     loadings_df["_n_assets"] = n_assets_used
@@ -350,6 +403,10 @@ def compute_rolling_pca_loadings_weighted(
     min_assets: int = 10,
     min_periods: int = 30,
     n_components: int = 1,
+    ridge_epsilon: float = 1e-6,
+    min_eigenvalue: float = 1e-8,
+    min_loading_norm: float = 1e-5,
+    anchor_asset: str = "BTC",
 ) -> pd.DataFrame:
     """
     Compute rolling PCA with volume weighting and extract PC loadings.
@@ -376,6 +433,8 @@ def compute_rolling_pca_loadings_weighted(
     # Pre-allocate output matrices - one per component
     loadings_matrices = [np.full((len(dates), len(assets)), np.nan) for _ in range(n_components)]
     variance_explained = np.full((len(dates), n_components), np.nan)
+    eigenvalues_record = np.full((len(dates), n_components), np.nan)
+    condition_numbers = np.full(len(dates), np.nan)
     n_assets_used = np.full(len(dates), 0, dtype=int)
 
     print(f"Computing volume-weighted rolling PCA with {window_days}-day window...")
@@ -418,30 +477,72 @@ def compute_rolling_pca_loadings_weighted(
         # Apply volume weighting: scale returns by weights
         weighted_returns = returns_clean * weights_clean
 
-        # Fit PCA on weighted returns
+        matrix = weighted_returns.values
+        matrix = matrix - matrix.mean(axis=0, keepdims=True)
+
+        cov = np.cov(matrix, rowvar=False)
+        if np.isnan(cov).any():
+            cov = np.nan_to_num(cov)
+
+        cov += np.eye(cov.shape[0]) * ridge_epsilon
+
         try:
-            pca = PCA(n_components=n_components)
-            pca.fit(weighted_returns)
-
-            # Extract loadings for each component
-            valid_asset_list = returns_clean.columns
-            for pc_idx in range(n_components):
-                pc_loadings = pca.components_[pc_idx]  # Shape: (n_valid_assets,)
-
-                # Map back to full asset list
-                asset_indices = [assets.get_loc(asset) for asset in valid_asset_list]
-                loadings_matrices[pc_idx][i, asset_indices] = pc_loadings
-
-            variance_explained[i, :] = pca.explained_variance_ratio_[:n_components]
-            n_assets_used[i] = len(valid_asset_list)
-
-            pca_computed += 1
-            if pca_computed % 100 == 0:
-                print(f"  Computed {pca_computed} PCAs (at date index {i + 1}/{len(dates)})")
-
-        except Exception as exc:
-            print(f"Warning: PCA failed on {date}: {exc}")
+            eigenvalues, eigenvectors = np.linalg.eigh(cov)
+        except np.linalg.LinAlgError as exc:
+            print(f"Warning: Weighted PCA eigendecomposition failed on {date}: {exc}")
             continue
+
+        order = np.argsort(eigenvalues)[::-1]
+        eigenvalues = eigenvalues[order]
+        eigenvectors = eigenvectors[:, order]
+
+        total_variance = eigenvalues.sum()
+        if total_variance <= 0:
+            continue
+
+        variance_ratio = eigenvalues / total_variance
+        condition_numbers[i] = (
+            eigenvalues[0] / eigenvalues[-1] if eigenvalues[-1] > 0 else np.inf
+        )
+
+        valid_asset_list = returns_clean.columns
+        asset_indices = [assets.get_loc(asset) for asset in valid_asset_list]
+
+        skipped = False
+        for pc_idx in range(n_components):
+            eig = eigenvalues[pc_idx]
+            if eig < min_eigenvalue:
+                skipped = True
+                break
+
+            loadings = eigenvectors[:, pc_idx]
+            norm = np.linalg.norm(loadings)
+            if not np.isfinite(norm) or norm < min_loading_norm:
+                skipped = True
+                break
+
+            loadings = loadings / norm
+
+            if anchor_asset in valid_asset_list:
+                anchor_idx = valid_asset_list.get_loc(anchor_asset)
+                if loadings[anchor_idx] < 0:
+                    loadings = -loadings
+            else:
+                if loadings.sum() < 0:
+                    loadings = -loadings
+
+            loadings_matrices[pc_idx][i, asset_indices] = loadings
+            variance_explained[i, pc_idx] = variance_ratio[pc_idx]
+            eigenvalues_record[i, pc_idx] = eig
+
+        if skipped:
+            continue
+
+        n_assets_used[i] = len(valid_asset_list)
+
+        pca_computed += 1
+        if pca_computed % 100 == 0:
+            print(f"  Computed {pca_computed} PCAs (at date index {i + 1}/{len(dates)})")
 
     # Convert to DataFrame
     if n_components == 1:
@@ -465,6 +566,12 @@ def compute_rolling_pca_loadings_weighted(
         # Add variance explained for each component
         for pc_idx in range(n_components):
             loadings_df[f"_variance_explained_pc{pc_idx + 1}"] = variance_explained[:, pc_idx]
+
+    for pc_idx in range(n_components):
+        col_name = "_pc1_eigenvalue" if n_components == 1 else f"_eigenvalue_pc{pc_idx + 1}"
+        loadings_df[col_name] = eigenvalues_record[:, pc_idx]
+
+    loadings_df["_condition_number"] = condition_numbers
 
     # Add asset count metadata
     loadings_df["_n_assets"] = n_assets_used
