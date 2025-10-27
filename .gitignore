@@ -16,3 +16,4 @@ logs/
 # Misc tooling
 .ruff_cache/
 .pytest_cache/
+gradient_backtest_results.png
