@@ -2,7 +2,7 @@
 
 import asyncio
 import random
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Any, Dict, List, Optional
 
 import httpx
@@ -15,6 +15,7 @@ from slipstream.gradient.sensitivity import (
     compute_vol_normalized_returns,
     filter_universe_by_liquidity,
 )
+from slipstream.gradient.live import cache as cache_module
 
 # Tunable request controls to play nicely with Hyperliquid's rate limits.
 # Conservative settings to avoid bans - reduced from 10 to 5 concurrent requests
@@ -185,6 +186,62 @@ async def fetch_candles_for_asset(
     return await _run(client)
 
 
+async def fetch_candles_with_cache(
+    asset: str,
+    endpoint: str,
+    redis_client: Optional[Any],
+    http_client: httpx.AsyncClient,
+) -> pd.DataFrame:
+    """
+    Fetch candles for an asset, using cache when available.
+
+    Strategy:
+    1. If cache disabled or no cache: fetch all 1100 candles
+    2. If cached: only fetch new candles since last cached timestamp
+    3. Merge cached + new data
+    4. Update cache
+
+    Args:
+        asset: Asset symbol
+        endpoint: API endpoint
+        redis_client: Redis client (or None if caching disabled)
+        http_client: HTTP client for API requests
+
+    Returns:
+        DataFrame with candles
+    """
+    # If caching disabled, fetch all candles
+    if redis_client is None:
+        return await fetch_candles_for_asset(
+            asset, endpoint, n_candles=1100, client=http_client
+        )
+
+    # Check cache
+    cached_df = cache_module.get_cached_candles(asset, redis_client)
+    last_time = cache_module.get_last_candle_time(asset, redis_client)
+
+    if last_time is None:
+        # No cache: fetch all 1100 candles
+        new_df = await fetch_candles_for_asset(
+            asset, endpoint, n_candles=1100, client=http_client
+        )
+    else:
+        # Have cache: only fetch new candles since last_time
+        # Fetch last 50 candles to ensure we catch any new ones
+        new_df = await fetch_candles_for_asset(
+            asset, endpoint, n_candles=50, client=http_client
+        )
+
+    # Merge cached and new
+    combined_df = cache_module.merge_cached_and_new(cached_df, new_df)
+
+    # Update cache
+    if not combined_df.empty:
+        cache_module.set_cached_candles(asset, combined_df, redis_client)
+
+    return combined_df
+
+
 def fetch_live_data(config) -> Dict[str, Any]:
     """
     Fetch latest 4h candle data for all perpetual markets.
@@ -204,20 +261,33 @@ def fetch_live_data(config) -> Dict[str, Any]:
     assets = asyncio.run(fetch_all_perp_markets(endpoint))
     print(f"Found {len(assets)} perpetual markets")
 
-    # Fetch candles for all assets
-    print(f"Fetching 1100 4h candles for {len(assets)} assets...")
+    # Setup Redis client if caching enabled
+    redis_client = None
+    if cache_module.cache_enabled():
+        try:
+            redis_client = cache_module.get_redis_client()
+            redis_client.ping()  # Test connection
+            print("✓ Redis cache enabled")
+        except Exception as e:
+            print(f"Warning: Redis connection failed, caching disabled: {e}")
+            redis_client = None
+    else:
+        print("Cache disabled (set REDIS_ENABLED=true to enable)")
+
+    # Fetch candles for all assets (with caching if enabled)
+    cache_status = "with cache" if redis_client else "without cache"
+    print(f"Fetching candles for {len(assets)} assets ({cache_status})...")
 
     async def fetch_all_candles():
         semaphore = asyncio.Semaphore(MAX_CONCURRENT_REQUESTS)
         async with httpx.AsyncClient(timeout=30.0) as client:
             async def fetch_with_limit(asset: str):
                 async with semaphore:
-                    return await fetch_candles_for_asset(
+                    return await fetch_candles_with_cache(
                         asset,
                         endpoint,
-                        n_candles=1100,
-                        interval="4h",
-                        client=client,
+                        redis_client,
+                        client,
                     )
 
             tasks = [asyncio.create_task(fetch_with_limit(asset)) for asset in assets]
