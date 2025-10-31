@@ -2,7 +2,7 @@
 
 import asyncio
 from datetime import datetime
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 import httpx
 import pandas as pd
@@ -14,6 +14,12 @@ from slipstream.gradient.sensitivity import (
     compute_vol_normalized_returns,
     filter_universe_by_liquidity,
 )
+
+# Tunable request controls to play nicely with Hyperliquid's rate limits.
+MAX_CONCURRENT_REQUESTS = 10
+MAX_REQUEST_ATTEMPTS = 6
+INITIAL_BACKOFF_SECONDS = 1.0
+BACKOFF_FACTOR = 2.0
 
 
 async def fetch_all_perp_markets(endpoint: str) -> List[str]:
@@ -41,11 +47,71 @@ async def fetch_all_perp_markets(endpoint: str) -> List[str]:
         return symbols
 
 
+async def _post_with_backoff(
+    client: httpx.AsyncClient,
+    url: str,
+    payload: Dict[str, Any],
+    *,
+    max_attempts: int = MAX_REQUEST_ATTEMPTS,
+    initial_backoff: float = INITIAL_BACKOFF_SECONDS,
+    backoff_factor: float = BACKOFF_FACTOR,
+) -> httpx.Response:
+    """POST with exponential backoff on transport, 429, and 5xx responses."""
+    delay = initial_backoff
+
+    for attempt in range(1, max_attempts + 1):
+        try:
+            response = await client.post(url, json=payload)
+        except httpx.HTTPError:
+            if attempt == max_attempts:
+                raise
+            await asyncio.sleep(delay)
+            delay *= backoff_factor
+            continue
+
+        if response.status_code == 429:
+            # Respect server-provided retry hints when possible.
+            wait_time = delay
+            retry_after = response.headers.get("Retry-After")
+            if retry_after:
+                try:
+                    wait_time = max(wait_time, float(retry_after))
+                except ValueError:
+                    pass
+
+            if attempt == max_attempts:
+                response.raise_for_status()
+
+            await asyncio.sleep(wait_time)
+            delay *= backoff_factor
+            continue
+
+        try:
+            response.raise_for_status()
+        except httpx.HTTPStatusError as exc:
+            status = exc.response.status_code
+            if attempt == max_attempts or not (500 <= status < 600):
+                raise
+            await asyncio.sleep(delay)
+            delay *= backoff_factor
+            continue
+
+        return response
+
+    # This should be unreachable because we either returned or raised.
+    raise RuntimeError("Failed to obtain successful response after retries")
+
+
 async def fetch_candles_for_asset(
     asset: str,
     endpoint: str,
     n_candles: int = 1100,
-    interval: str = "4h"
+    interval: str = "4h",
+    *,
+    client: Optional[httpx.AsyncClient] = None,
+    max_attempts: int = MAX_REQUEST_ATTEMPTS,
+    initial_backoff: float = INITIAL_BACKOFF_SECONDS,
+    backoff_factor: float = BACKOFF_FACTOR,
 ) -> pd.DataFrame:
     """
     Fetch historical 4h candles for a single asset.
@@ -59,15 +125,16 @@ async def fetch_candles_for_asset(
     Returns:
         DataFrame with columns: timestamp, open, high, low, close, volume
     """
-    async with httpx.AsyncClient(timeout=30.0) as client:
+    async def _run(active_client: httpx.AsyncClient) -> pd.DataFrame:
         # Calculate start time for n_candles
         end_time = int(datetime.now().timestamp() * 1000)
         interval_ms = 4 * 60 * 60 * 1000  # 4 hours in ms
         start_time = end_time - (n_candles * interval_ms)
 
-        response = await client.post(
+        response = await _post_with_backoff(
+            active_client,
             f"{endpoint}/info",
-            json={
+            {
                 "type": "candleSnapshot",
                 "req": {
                     "coin": asset,
@@ -75,9 +142,11 @@ async def fetch_candles_for_asset(
                     "startTime": start_time,
                     "endTime": end_time
                 }
-            }
+            },
+            max_attempts=max_attempts,
+            initial_backoff=initial_backoff,
+            backoff_factor=backoff_factor,
         )
-        response.raise_for_status()
         data = response.json()
 
         # Parse candles
@@ -99,6 +168,12 @@ async def fetch_candles_for_asset(
         df["asset"] = asset
 
         return df
+
+    if client is None:
+        async with httpx.AsyncClient(timeout=30.0) as owned_client:
+            return await _run(owned_client)
+
+    return await _run(client)
 
 
 def fetch_live_data(config) -> Dict[str, Any]:
@@ -124,12 +199,21 @@ def fetch_live_data(config) -> Dict[str, Any]:
     print(f"Fetching 1100 4h candles for {len(assets)} assets...")
 
     async def fetch_all_candles():
-        tasks = [
-            fetch_candles_for_asset(asset, endpoint, n_candles=1100, interval="4h")
-            for asset in assets
-        ]
-        results = await asyncio.gather(*tasks, return_exceptions=True)
-        return results
+        semaphore = asyncio.Semaphore(MAX_CONCURRENT_REQUESTS)
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            async def fetch_with_limit(asset: str):
+                async with semaphore:
+                    return await fetch_candles_for_asset(
+                        asset,
+                        endpoint,
+                        n_candles=1100,
+                        interval="4h",
+                        client=client,
+                    )
+
+            tasks = [asyncio.create_task(fetch_with_limit(asset)) for asset in assets]
+            results = await asyncio.gather(*tasks, return_exceptions=True)
+            return results
 
     candle_dfs = asyncio.run(fetch_all_candles())
 
@@ -149,6 +233,9 @@ def fetch_live_data(config) -> Dict[str, Any]:
         print(f"Warning: Failed to fetch data for {len(failed_assets)} assets")
 
     # Combine into single panel
+    if not valid_dfs:
+        raise RuntimeError("Failed to fetch candle data for all assets")
+
     panel = pd.concat(valid_dfs, ignore_index=True)
     panel = panel.sort_values(["timestamp", "asset"]).reset_index(drop=True)
 
