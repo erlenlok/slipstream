@@ -47,7 +47,26 @@ Your hardening work looks excellent:
 - For testing, use testnet first: https://app.hyperliquid-testnet.xyz/
 - Same process as mainnet
 
-### 1.2 Set Environment Variables
+### 1.2 Install and Setup Redis (5 min)
+
+**Redis dramatically speeds up data fetching** (first run ~2-3 min, subsequent runs ~5-10 sec):
+
+```bash
+# Install Redis
+sudo apt-get update && sudo apt-get install -y redis-server
+
+# Disable password for localhost (already done if you followed along)
+echo "user default on nopass +@all ~*" | sudo tee /etc/redis/users.acl
+
+# Start and enable Redis
+sudo systemctl start redis-server
+sudo systemctl enable redis-server
+
+# Test connection
+redis-cli ping  # Should return: PONG
+```
+
+### 1.3 Set Environment Variables
 
 Add to `~/.bashrc`:
 
@@ -67,6 +86,11 @@ export TELEGRAM_CHAT_ID="..."       # Your chat ID
 export EMAIL_FROM="your@gmail.com"
 export EMAIL_TO="your@gmail.com"
 export EMAIL_PASSWORD="app-password"
+
+# Gradient Trading - Redis Cache (enabled by default)
+export REDIS_ENABLED="true"         # Set to "false" to disable caching
+export REDIS_HOST="localhost"
+export REDIS_PORT="6379"
 EOF
 
 source ~/.bashrc
