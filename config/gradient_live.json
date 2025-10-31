@@ -1,6 +1,6 @@
 {
   "strategy": "gradient_momentum_35pct_4h",
-  "capital_usd": 5000,
+  "capital_usd": 200,
   "max_position_pct": 10,
   "max_total_leverage": 2.0,
   "concentration_pct": 35,
@@ -11,7 +11,7 @@
   "liquidity_threshold_usd": 10000,
   "liquidity_impact_pct": 2.5,
   "emergency_stop_drawdown_pct": 20,
-  "dry_run": true,
+  "dry_run": false,
   "api": {
     "endpoint": "https://api.hyperliquid.xyz",
     "mainnet": true
