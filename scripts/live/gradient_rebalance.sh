@@ -35,6 +35,15 @@ LOG_DIR="/var/log/gradient"
 # Create log directory if it doesn't exist
 mkdir -p "$LOG_DIR"
 
+# Export required environment variables
+export HYPERLIQUID_API_KEY="0x998c0B58193faca878B55aE29165b68167A1BD30"
+export HYPERLIQUID_API_SECRET="0xc414e72b39459d4a2cefb75a3ed82c3c9fdc6313593372a108372fceef354cad"
+export TELEGRAM_BOT_TOKEN="8326508237:AAFI2rI2MhN_3CnukAcUgBmiOy8-JPnvlTA"
+export TELEGRAM_CHAT_ID="1672609276"
+export REDIS_ENABLED="true"
+export REDIS_HOST="localhost"
+export REDIS_PORT="6379"
+
 # Timing verification
 CURRENT_HOUR=$(date -u +%H)
 CURRENT_MIN=$(date -u +%M)
