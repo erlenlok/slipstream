@@ -18,6 +18,8 @@ from .execution import (
     execute_rebalance_with_stages,
     validate_execution_results
 )
+from .performance import PerformanceTracker
+from .notifications import send_telegram_rebalance_alert_sync
 
 
 def setup_logging(config):
@@ -57,6 +59,9 @@ def run_rebalance():
         config = load_config()
         validate_config(config)
         logger = setup_logging(config)
+
+        # Initialize performance tracker
+        tracker = PerformanceTracker(log_dir=config.log_dir)
 
         logger.info("=" * 80)
         logger.info("Starting Gradient rebalance cycle")
@@ -107,6 +112,40 @@ def run_rebalance():
         logger.info(f"Stage 1 fills: {execution_results['stage1_filled']}")
         logger.info(f"Stage 2 fills: {execution_results['stage2_filled']}")
         logger.info(f"Total turnover: ${execution_results['total_turnover']:,.2f}")
+
+        # Log to performance tracker
+        rebalance_timestamp = datetime.now()
+        tracker.log_rebalance(
+            timestamp=rebalance_timestamp,
+            target_positions=target_positions,
+            execution_results=execution_results,
+            config=config
+        )
+        tracker.log_positions(
+            timestamp=rebalance_timestamp,
+            positions=target_positions,
+            config=config
+        )
+
+        # Send Telegram notification
+        if config.alerts_enabled:
+            logger.info("Sending Telegram notification...")
+            rebalance_data = {
+                "timestamp": rebalance_timestamp.strftime("%Y-%m-%d %H:%M:%S"),
+                "n_long": n_long,
+                "n_short": n_short,
+                "n_positions": len(target_positions),
+                "total_turnover": execution_results['total_turnover'],
+                "stage1_filled": execution_results['stage1_filled'],
+                "stage2_filled": execution_results['stage2_filled'],
+                "errors": len(execution_results.get('errors', [])),
+                "dry_run": config.dry_run,
+            }
+            telegram_success = send_telegram_rebalance_alert_sync(rebalance_data, config)
+            if telegram_success:
+                logger.info("✓ Telegram notification sent")
+            else:
+                logger.warning("✗ Failed to send Telegram notification")
 
         if config.dry_run:
             logger.warning("DRY-RUN MODE: No actual orders were placed")

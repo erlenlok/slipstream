@@ -27,8 +27,9 @@
     "level": "INFO"
   },
   "alerts": {
-    "enabled": false,
+    "enabled": true,
     "telegram_token": "",
-    "telegram_chat_id": ""
+    "telegram_chat_id": "",
+    "email_enabled": true
   }
 }
