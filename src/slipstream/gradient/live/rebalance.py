@@ -11,9 +11,13 @@ from datetime import datetime
 from pathlib import Path
 
 from .config import load_config, validate_config
-from .data import fetch_live_data, compute_live_signals
+from .data import fetch_live_data, compute_live_signals, validate_market_data, validate_signals
 from .portfolio import construct_target_portfolio
-from .execution import get_current_positions, execute_rebalance
+from .execution import (
+    get_current_positions,
+    execute_rebalance_with_stages,
+    validate_execution_results
+)
 
 
 def setup_logging(config):
@@ -65,11 +69,13 @@ def run_rebalance():
         # Step 1: Fetch data
         logger.info("Fetching latest market data...")
         market_data = fetch_live_data(config)
+        validate_market_data(market_data)
         logger.info(f"Fetched data for {len(market_data['assets'])} assets")
 
         # Step 2: Compute signals
         logger.info("Computing momentum signals...")
         signals = compute_live_signals(market_data, config)
+        validate_signals(signals, config)
         logger.info(f"Computed signals for {len(signals)} assets")
 
         # Step 3: Construct target portfolio
@@ -87,14 +93,19 @@ def run_rebalance():
         current_positions = get_current_positions(config)
         logger.info(f"Current: {len(current_positions)} positions")
 
-        # Step 5: Execute rebalance
-        logger.info("Executing rebalance...")
-        execution_results = execute_rebalance(target_positions, current_positions, config)
+        # Step 5: Execute rebalance with two-stage limit→market execution
+        logger.info("Executing rebalance (two-stage: limit → market)...")
+        execution_results = execute_rebalance_with_stages(
+            target_positions,
+            current_positions,
+            config
+        )
 
-        # Log results
+        # Validate and log results
+        validate_execution_results(execution_results, config)
         logger.info("Rebalance complete!")
-        logger.info(f"Orders placed: {execution_results['orders_placed']}")
-        logger.info(f"Orders filled: {execution_results['orders_filled']}")
+        logger.info(f"Stage 1 fills: {execution_results['stage1_filled']}")
+        logger.info(f"Stage 2 fills: {execution_results['stage2_filled']}")
         logger.info(f"Total turnover: ${execution_results['total_turnover']:,.2f}")
 
         if config.dry_run:

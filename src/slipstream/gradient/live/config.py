@@ -33,8 +33,10 @@ class GradientConfig:
     api_key: str
     api_secret: str
     mainnet: bool
+    api: dict  # For dict-style access
 
-    # Execution
+    # Execution parameters
+    execution: dict
     dry_run: bool
 
     # Logging
@@ -79,6 +81,14 @@ def load_config(config_path: str = "config/gradient_live.json") -> GradientConfi
                 "HYPERLIQUID_API_SECRET environment variables."
             )
 
+    # Set default execution params if not in config
+    execution_params = data.get("execution", {
+        "passive_timeout_seconds": 3600,
+        "limit_order_aggression": "join_best",
+        "cancel_before_market_sweep": True,
+        "min_order_size_usd": 10
+    })
+
     return GradientConfig(
         capital_usd=data["capital_usd"],
         concentration_pct=data["concentration_pct"],
@@ -95,6 +105,8 @@ def load_config(config_path: str = "config/gradient_live.json") -> GradientConfi
         api_key=api_key,
         api_secret=api_secret,
         mainnet=data["api"]["mainnet"],
+        api=data["api"],  # Store full API config
+        execution=execution_params,  # Store execution params
         dry_run=data.get("dry_run", True),
         log_dir=data["logging"]["dir"],
         log_level=data["logging"]["level"],

@@ -16,47 +16,46 @@ def construct_target_portfolio(signals: pd.DataFrame, config) -> Dict[str, float
     Returns:
         Dictionary mapping asset -> target position size in USD
         Positive values = long, negative values = short
-
-    TODO: Implement portfolio construction
-    1. Filter to liquid assets only (include_in_universe == True)
-    2. Rank by momentum_score
-    3. Select top N% (long) and bottom N% (short) where N = concentration_pct
-    4. Calculate weights based on weight_scheme:
-       - "equal": 1/N per asset in each bucket
-       - "inverse_vol": w_i ∝ 1/vol_24h, normalized
-    5. Scale to dollar amounts based on config.capital_usd
-    6. Apply position size limits (max_position_pct)
-    7. Verify total leverage within limits
     """
-    raise NotImplementedError(
-        "construct_target_portfolio() not yet implemented. "
-        "Reuse logic from slipstream.gradient.sensitivity.run_concentration_backtest()."
-    )
+    # Filter to liquid assets only
+    liquid = signals[signals["include_in_universe"] == True].copy()
 
-    # Example implementation structure:
-    # liquid = signals[signals["include_in_universe"] == True].copy()
-    # liquid = liquid.sort_values("momentum_score", ascending=False)
-    # n_assets = len(liquid)
-    # n_select = max(1, int(np.ceil(n_assets * config.concentration_pct / 100.0)))
-    #
-    # long_assets = liquid.head(n_select)
-    # short_assets = liquid.tail(n_select)
-    #
-    # weights_long = compute_weights(long_assets, config.weight_scheme, "long")
-    # weights_short = compute_weights(short_assets, config.weight_scheme, "short")
-    #
-    # # Scale to dollar amounts
-    # capital_per_side = config.capital_usd  # 100% long, 100% short
-    # positions = {}
-    # for asset, weight in weights_long.items():
-    #     positions[asset] = weight * capital_per_side
-    # for asset, weight in weights_short.items():
-    #     positions[asset] = weight * capital_per_side  # Already negative
-    #
-    # # Apply position size limits
-    # positions = apply_position_limits(positions, config)
-    #
-    # return positions
+    if len(liquid) == 0:
+        print("Warning: No liquid assets available")
+        return {}
+
+    # Already sorted by momentum_score descending
+    n_assets = len(liquid)
+    n_select = max(1, int(np.ceil(n_assets * config.concentration_pct / 100.0)))
+
+    print(f"Selecting top/bottom {n_select} assets ({config.concentration_pct}% of {n_assets} liquid assets)")
+
+    # Select top N% (highest momentum = long) and bottom N% (lowest momentum = short)
+    long_assets = liquid.head(n_select)
+    short_assets = liquid.tail(n_select)
+
+    # Compute weights
+    weights_long = compute_weights(long_assets, config.weight_scheme, "long")
+    weights_short = compute_weights(short_assets, config.weight_scheme, "short")
+
+    # Scale to dollar amounts
+    # Each side gets 100% of capital (gross exposure = 2x)
+    capital_per_side = config.capital_usd
+    positions = {}
+
+    for asset, weight in weights_long.items():
+        positions[asset] = weight * capital_per_side
+
+    for asset, weight in weights_short.items():
+        positions[asset] = weight * capital_per_side  # Already negative from compute_weights
+
+    # Apply position size limits
+    positions = apply_position_limits(positions, config)
+
+    # Validate
+    validate_target_portfolio(positions, config)
+
+    return positions
 
 
 def compute_weights(assets: pd.DataFrame, weight_scheme: str, side: str) -> Dict[str, float]:

@@ -16,6 +16,12 @@
     "endpoint": "https://api.hyperliquid.xyz",
     "mainnet": true
   },
+  "execution": {
+    "passive_timeout_seconds": 3600,
+    "limit_order_aggression": "join_best",
+    "cancel_before_market_sweep": true,
+    "min_order_size_usd": 10
+  },
   "logging": {
     "dir": "/var/log/gradient",
     "level": "INFO"
