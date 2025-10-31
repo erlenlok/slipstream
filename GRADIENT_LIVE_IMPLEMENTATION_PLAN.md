@@ -262,12 +262,25 @@ def run_rebalance():
 Already created. Just needs testing.
 
 Set up cron:
+
+**⚠️ CRITICAL: Use :01 timing, not :00!**
+
 ```bash
 crontab -e
 
-# Add this line (runs at 00:00, 04:00, 08:00, 12:00, 16:00, 20:00 UTC)
-0 */4 * * * /root/slipstream/scripts/live/gradient_rebalance.sh >> /var/log/gradient/cron.log 2>&1
+# CORRECT: Runs at :01 of each 4-hour boundary (00:01, 04:01, 08:01, etc. UTC)
+1 */4 * * * /root/slipstream/scripts/live/gradient_rebalance.sh >> /var/log/gradient/cron.log 2>&1
+
+# WRONG: DO NOT USE :00
+# 0 */4 * * * ... ← This may fetch incomplete candle data!
 ```
+
+**Why :01 matters:**
+- Hyperliquid 4h candles close at :00 (e.g., 04:00:00 UTC)
+- Data needs ~30 seconds to finalize
+- Running at :01 ensures complete candle data
+- **Still uses exact same candles as backtest**
+- See `docs/CANDLE_ALIGNMENT.md` for verification
 
 ### Phase 7: Testing & Validation (2 hours)
 - [ ] Test signal generation on recent data
