@@ -1,0 +1,28 @@
+{
+  "strategy": "gradient_momentum_35pct_4h",
+  "capital_usd": 5000,
+  "max_position_pct": 10,
+  "max_total_leverage": 2.0,
+  "concentration_pct": 35,
+  "rebalance_freq_hours": 4,
+  "weight_scheme": "inverse_vol",
+  "lookback_spans": [2, 4, 8, 16, 32, 64, 128, 256, 512, 1024],
+  "vol_span": 24,
+  "liquidity_threshold_usd": 10000,
+  "liquidity_impact_pct": 2.5,
+  "emergency_stop_drawdown_pct": 20,
+  "dry_run": true,
+  "api": {
+    "endpoint": "https://api.hyperliquid.xyz",
+    "mainnet": true
+  },
+  "logging": {
+    "dir": "/var/log/gradient",
+    "level": "INFO"
+  },
+  "alerts": {
+    "enabled": false,
+    "telegram_token": "",
+    "telegram_chat_id": ""
+  }
+}
