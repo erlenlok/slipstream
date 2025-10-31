@@ -1,6 +1,7 @@
 """Data fetching and signal computation for live Gradient trading."""
 
 import asyncio
+import random
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 
@@ -16,10 +17,12 @@ from slipstream.gradient.sensitivity import (
 )
 
 # Tunable request controls to play nicely with Hyperliquid's rate limits.
-MAX_CONCURRENT_REQUESTS = 10
+# Conservative settings to avoid bans - reduced from 10 to 5 concurrent requests
+MAX_CONCURRENT_REQUESTS = 5
 MAX_REQUEST_ATTEMPTS = 6
-INITIAL_BACKOFF_SECONDS = 1.0
+INITIAL_BACKOFF_SECONDS = 2.0  # Increased from 1.0 to be more conservative
 BACKOFF_FACTOR = 2.0
+BACKOFF_JITTER = 0.3  # Add ±30% jitter to prevent thundering herd
 
 
 async def fetch_all_perp_markets(endpoint: str) -> List[str]:
@@ -55,9 +58,15 @@ async def _post_with_backoff(
     max_attempts: int = MAX_REQUEST_ATTEMPTS,
     initial_backoff: float = INITIAL_BACKOFF_SECONDS,
     backoff_factor: float = BACKOFF_FACTOR,
+    jitter: float = BACKOFF_JITTER,
 ) -> httpx.Response:
-    """POST with exponential backoff on transport, 429, and 5xx responses."""
+    """POST with exponential backoff + jitter on transport, 429, and 5xx responses."""
     delay = initial_backoff
+
+    def add_jitter(base_delay: float) -> float:
+        """Add random jitter to delay to prevent thundering herd."""
+        jitter_range = base_delay * jitter
+        return base_delay + random.uniform(-jitter_range, jitter_range)
 
     for attempt in range(1, max_attempts + 1):
         try:
@@ -65,7 +74,7 @@ async def _post_with_backoff(
         except httpx.HTTPError:
             if attempt == max_attempts:
                 raise
-            await asyncio.sleep(delay)
+            await asyncio.sleep(add_jitter(delay))
             delay *= backoff_factor
             continue
 
@@ -82,7 +91,7 @@ async def _post_with_backoff(
             if attempt == max_attempts:
                 response.raise_for_status()
 
-            await asyncio.sleep(wait_time)
+            await asyncio.sleep(add_jitter(wait_time))
             delay *= backoff_factor
             continue
 
@@ -92,7 +101,7 @@ async def _post_with_backoff(
             status = exc.response.status_code
             if attempt == max_attempts or not (500 <= status < 600):
                 raise
-            await asyncio.sleep(delay)
+            await asyncio.sleep(add_jitter(delay))
             delay *= backoff_factor
             continue
 

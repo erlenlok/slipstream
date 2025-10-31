@@ -6,7 +6,7 @@ readme = "README.md"
 requires-python = ">=3.10"
 dependencies = [
     "httpx>=0.25",
-    "hyperliquid>=0.4.66",
+    "hyperliquid-python-sdk>=0.20.0",
     "numpy>=1.26",
     "pandas>=2.2",
     "scikit-learn>=1.3",
