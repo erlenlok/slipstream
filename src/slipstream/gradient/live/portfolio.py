@@ -1,8 +1,10 @@
 """Portfolio construction for live Gradient trading."""
 
-import pandas as pd
-import numpy as np
+import math
 from typing import Dict
+
+import numpy as np
+import pandas as pd
 
 
 def construct_target_portfolio(signals: pd.DataFrame, config) -> Dict[str, float]:
@@ -18,17 +20,34 @@ def construct_target_portfolio(signals: pd.DataFrame, config) -> Dict[str, float
         Positive values = long, negative values = short
     """
     # Filter to liquid assets only
-    liquid = signals[signals["include_in_universe"] == True].copy()
+    liquid = (
+        signals[signals["include_in_universe"] == True]
+        .sort_values("momentum_score", ascending=False)
+        .reset_index(drop=True)
+        .copy()
+    )
 
-    if len(liquid) == 0:
+    n_liquid = len(liquid)
+    if n_liquid == 0:
         print("Warning: No liquid assets available")
         return {}
 
-    # Already sorted by momentum_score descending
-    n_assets = len(liquid)
-    n_select = max(1, int(np.ceil(n_assets * config.concentration_pct / 100.0)))
+    if n_liquid < 2:
+        print("Warning: Not enough liquid assets to build both long and short books")
+        return {}
 
-    print(f"Selecting top/bottom {n_select} assets ({config.concentration_pct}% of {n_assets} liquid assets)")
+    raw_select = math.ceil(n_liquid * config.concentration_pct / 100.0)
+    n_select = max(1, raw_select)
+    n_select = min(n_select, n_liquid // 2)
+
+    if n_select == 0:
+        print("Warning: Concentration setting results in empty buckets")
+        return {}
+
+    print(
+        f"Selecting top/bottom {n_select} assets "
+        f"({config.concentration_pct}% of {n_liquid} liquid assets)"
+    )
 
     # Select top N% (highest momentum = long) and bottom N% (lowest momentum = short)
     long_assets = liquid.head(n_select)
@@ -72,6 +91,9 @@ def compute_weights(assets: pd.DataFrame, weight_scheme: str, side: str) -> Dict
 
     TODO: Implement weighting schemes
     """
+    if assets.empty:
+        return {}
+
     if weight_scheme == "equal":
         weights = pd.Series(1.0 / len(assets), index=assets["asset"])
     elif weight_scheme == "inverse_vol":

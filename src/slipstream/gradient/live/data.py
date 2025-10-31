@@ -1,20 +1,18 @@
 """Data fetching and signal computation for live Gradient trading."""
 
 import asyncio
-import pandas as pd
-import numpy as np
-from typing import Dict, Any, List
 from datetime import datetime
-import httpx
+from typing import Any, Dict, List
 
-# Import signal computation functions from sensitivity module
+import httpx
+import pandas as pd
+
+from slipstream.gradient.signals import compute_trend_strength
 from slipstream.gradient.sensitivity import (
-    compute_log_returns,
-    compute_ewma_vol,
     compute_adv_usd,
-    filter_universe_by_liquidity,
+    compute_log_returns,
     compute_vol_normalized_returns,
-    compute_multispan_momentum,
+    filter_universe_by_liquidity,
 )
 
 
@@ -185,28 +183,56 @@ def compute_live_signals(market_data: Dict[str, Any], config) -> pd.DataFrame:
     panel = compute_adv_usd(panel, window=6)  # 6 * 4h = 24h
     panel = filter_universe_by_liquidity(
         panel,
-        trade_size_usd=config.liquidity_threshold,
-        max_impact_pct=config.liquidity_impact_pct
+        trade_size_usd=config.liquidity_threshold_usd,
+        max_impact_pct=config.liquidity_impact_pct,
     )
 
     print("Computing vol-normalized returns...")
     panel = compute_vol_normalized_returns(panel, vol_span=config.vol_span)
 
     print(f"Computing multi-span momentum (spans: {config.lookback_spans})...")
-    panel = compute_multispan_momentum(panel, lookback_spans=config.lookback_spans)
+    log_returns_wide = (
+        panel.pivot_table(
+            index="timestamp",
+            columns="asset",
+            values="log_return",
+            aggfunc="first",
+        )
+        .sort_index()
+    )
+
+    trend_strength = compute_trend_strength(
+        log_returns_wide,
+        lookbacks=config.lookback_spans,
+    )
 
     # Get latest timestamp only
-    latest_time = panel["timestamp"].max()
+    latest_time = trend_strength.index.max()
+    latest_scores = trend_strength.loc[latest_time]
+
     signals = panel[panel["timestamp"] == latest_time].copy()
 
     # Select relevant columns
     signals = signals[[
         "asset",
-        "momentum_score",
         "vol_24h",
         "adv_usd",
         "include_in_universe"
     ]]
+
+    signals = signals.drop_duplicates(subset="asset").set_index("asset")
+    signals["momentum_score"] = latest_scores
+    signals = (
+        signals
+        .dropna(subset=["momentum_score", "vol_24h"])
+        .reset_index()[[
+            "asset",
+            "momentum_score",
+            "vol_24h",
+            "adv_usd",
+            "include_in_universe",
+        ]]
+    )
 
     # Sort by momentum score descending
     signals = signals.sort_values("momentum_score", ascending=False).reset_index(drop=True)
