@@ -1,10 +1,430 @@
 """Order execution for live Gradient trading with two-stage limit→market execution."""
 
-import time
-import asyncio
-from typing import Dict, Any, List, Tuple
-from datetime import datetime
+from __future__ import annotations
+
+import math
 import os
+import time
+from dataclasses import dataclass
+from datetime import datetime
+from typing import Any, Dict, List, Optional, Tuple
+
+
+@dataclass
+class AssetMeta:
+    """Per-asset metadata required for sizing and pricing orders."""
+
+    name: str
+    sz_decimals: int
+    mid_px: Optional[float]
+    impact_bid: Optional[float]
+    impact_ask: Optional[float]
+
+
+@dataclass
+class HyperliquidContext:
+    """Container for Hyperliquid clients and metadata used during execution."""
+
+    info: Any
+    exchange: Optional[Any]
+    asset_meta: Dict[str, AssetMeta]
+
+
+def _load_hyperliquid_modules():
+    """Lazy-import Hyperliquid SDK components and return them."""
+    try:
+        from hyperliquid.info import Info  # type: ignore
+        from hyperliquid.exchange import Exchange  # type: ignore
+        from hyperliquid.utils import constants  # type: ignore
+        from eth_account import Account  # type: ignore
+    except ImportError as exc:  # pragma: no cover - surfaced to caller
+        raise ImportError(
+            "hyperliquid package not installed. Run: pip install hyperliquid"
+        ) from exc
+
+    return Info, Exchange, constants, Account
+
+
+def _resolve_base_url(config, constants_module) -> str:
+    """Resolve which Hyperliquid base URL to talk to."""
+    if getattr(config, "api_endpoint", None):
+        return config.api_endpoint.rstrip("/")
+
+    api_cfg = getattr(config, "api", {}) or {}
+    explicit = api_cfg.get("endpoint")
+    if explicit:
+        return explicit.rstrip("/")
+
+    mainnet = api_cfg.get("mainnet", getattr(config, "mainnet", True))
+    return (
+        constants_module.MAINNET_API_URL
+        if mainnet
+        else constants_module.TESTNET_API_URL
+    )
+
+
+def _parse_float(value: Any) -> Optional[float]:
+    """Safely convert API strings/numbers into floats."""
+    if value is None:
+        return None
+    if isinstance(value, (int, float)):
+        return float(value)
+    if isinstance(value, str):
+        cleaned = value.strip()
+        if not cleaned:
+            return None
+        # Remove whitespace first (e.g. "110 650")
+        cleaned = cleaned.replace(" ", "")
+        # If only commas are present, treat them as decimal separators.
+        if cleaned.count(",") and cleaned.count(".") == 0:
+            cleaned = cleaned.replace(",", ".")
+        else:
+            cleaned = cleaned.replace(",", "")
+        try:
+            return float(cleaned)
+        except ValueError:
+            return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _round_down(value: float, decimals: int) -> float:
+    """Round a float downwards to the supported decimal precision."""
+    if decimals <= 0:
+        return math.floor(value)
+    factor = 10**decimals
+    return math.floor(value * factor) / factor
+
+
+def _round_price(price: float, decimals: int = 6) -> float:
+    """Round price to a sensible default precision for perps."""
+    return round(price, decimals)
+
+
+def _fetch_meta_and_asset_ctxs(info_client) -> Tuple[Dict[str, Any], List[Dict[str, Any]]]:
+    """Fetch universe metadata plus per-asset context (mid, impact prices, etc.)."""
+    response = info_client.meta_and_asset_ctxs()
+
+    if isinstance(response, list) and len(response) >= 2:
+        meta_payload = response[0]
+        asset_ctxs = response[1]
+    elif isinstance(response, dict):
+        meta_payload = response
+        asset_ctxs = response.get("assetCtxs", [])
+    else:
+        raise RuntimeError("Unexpected response format from metaAndAssetCtxs")
+
+    if isinstance(asset_ctxs, dict) and "assetCtxs" in asset_ctxs:
+        asset_ctxs = asset_ctxs["assetCtxs"]
+
+    if not isinstance(asset_ctxs, list):
+        raise RuntimeError("Unexpected asset context payload from Hyperliquid API")
+
+    return meta_payload, asset_ctxs
+
+
+def _build_asset_meta(
+    info_client,
+    meta_payload: Dict[str, Any],
+    asset_ctxs: List[Dict[str, Any]],
+) -> Dict[str, AssetMeta]:
+    """Combine universe metadata + asset contexts into a quick-lookup map."""
+    universe = meta_payload.get("universe", [])
+    asset_meta: Dict[str, AssetMeta] = {}
+
+    for idx, entry in enumerate(universe):
+        name = entry.get("name")
+        if not name:
+            continue
+
+        ctx = asset_ctxs[idx] if idx < len(asset_ctxs) else {}
+        impact_raw = ctx.get("impactPxs", [])
+        bid_px = None
+        ask_px = None
+        if isinstance(impact_raw, (list, tuple)):
+            bid_px = _parse_float(impact_raw[0]) if len(impact_raw) > 0 else None
+            ask_px = _parse_float(impact_raw[1]) if len(impact_raw) > 1 else None
+
+        asset_meta[name] = AssetMeta(
+            name=name,
+            sz_decimals=int(entry.get("szDecimals", 6)),
+            mid_px=_parse_float(
+                ctx.get("markPx") or ctx.get("midPx") or ctx.get("oraclePx")
+            ),
+            impact_bid=bid_px,
+            impact_ask=ask_px,
+        )
+
+    # Fill missing mids using all_mids() fallback if required.
+    missing = [meta for meta in asset_meta.values() if not meta.mid_px]
+    if missing:
+        mids = info_client.all_mids()
+        for meta in missing:
+            coin_idx = info_client.name_to_coin.get(meta.name)
+            if coin_idx is not None and coin_idx < len(mids):
+                meta.mid_px = _parse_float(mids[coin_idx])
+
+    return asset_meta
+
+
+def _prepare_hyperliquid_context(config) -> HyperliquidContext:
+    """Instantiate Info/Exchange clients and fetch per-asset metadata."""
+    Info, Exchange, constants, Account = _load_hyperliquid_modules()
+    base_url = _resolve_base_url(config, constants)
+
+    info_client = Info(base_url)
+    meta_payload, asset_ctxs = _fetch_meta_and_asset_ctxs(info_client)
+    asset_meta = _build_asset_meta(info_client, meta_payload, asset_ctxs)
+
+    exchange_client = None
+    if not config.dry_run:
+        api_secret = os.getenv("HYPERLIQUID_API_SECRET") or config.api_secret
+        api_key = os.getenv("HYPERLIQUID_API_KEY") or config.api_key
+        if not api_secret:
+            raise ValueError(
+                "HYPERLIQUID_API_SECRET must be set when dry_run is false"
+            )
+        if not api_key:
+            raise ValueError(
+                "HYPERLIQUID_API_KEY must be set when dry_run is false"
+            )
+
+        wallet = Account.from_key(api_secret)
+        if wallet.address.lower() != api_key.lower():
+            raise ValueError(
+                "HYPERLIQUID_API_KEY does not match address derived from secret"
+            )
+
+        exchange_client = Exchange(
+            wallet=wallet,
+            base_url=base_url,
+            meta=meta_payload,
+            account_address=wallet.address,
+        )
+
+    return HyperliquidContext(
+        info=info_client,
+        exchange=exchange_client,
+        asset_meta=asset_meta,
+    )
+
+
+def _fetch_clearinghouse_state(base_url: str, wallet_address: str, dex: Optional[str] = None) -> Dict[str, Any]:
+    """Fetch clearinghouse state via raw HTTP POST (SDK doesn't expose this method).
+
+    Args:
+        base_url: API base URL
+        wallet_address: Main wallet address
+        dex: Optional perp DEX name
+
+    Returns:
+        Clearinghouse state dict with assetPositions, marginSummary, etc.
+    """
+    import requests
+
+    body: Dict[str, Any] = {
+        "type": "clearinghouseState",
+        "user": wallet_address
+    }
+    if dex:
+        body["dex"] = dex
+
+    response = requests.post(f"{base_url}/info", json=body, timeout=10)
+    response.raise_for_status()
+    return response.json()
+
+
+def _collect_user_states(base_url: str, wallet_address: str) -> List[Dict[str, Any]]:
+    """Fetch clearinghouse state for all relevant perp dexes.
+
+    Args:
+        base_url: API base URL
+        wallet_address: Main wallet address where positions live (not API key vault)
+    """
+    states: List[Dict[str, Any]] = []
+    # Always include default dex (empty string)
+    try:
+        # Use raw HTTP to fetch clearinghouse state from main wallet
+        default_state = _fetch_clearinghouse_state(base_url, wallet_address)
+        states.append(default_state)
+    except Exception as exc:  # pragma: no cover - surfaced to caller
+        raise RuntimeError(f"Failed to fetch clearinghouse_state for primary dex: {exc}") from exc
+
+    # Note: Multi-dex support omitted for now since we only need main DEX
+    # Could add perp_dexs() query here if needed in the future
+
+    return states
+
+
+def _walk_position_nodes(node: Any, seen: set[int]) -> List[Tuple[Dict[str, Any], Dict[str, Any]]]:
+    """Depth-first search yielding (container, position) pairs."""
+    results: List[Tuple[Dict[str, Any], Dict[str, Any]]] = []
+    stack: List[Any] = [node]
+
+    while stack:
+        current = stack.pop()
+        current_id = id(current)
+        if current_id in seen:
+            continue
+        seen.add(current_id)
+
+        if isinstance(current, dict):
+            pos = current.get("position")
+            if isinstance(pos, dict):
+                pos_id = id(pos)
+                if pos_id not in seen:
+                    seen.add(pos_id)
+                    results.append((current, pos))
+            if {"coin", "szi"} <= current.keys():
+                results.append((current, current))  # Dict already represents a position
+
+            for value in current.values():
+                if isinstance(value, (dict, list, tuple)):
+                    stack.append(value)
+
+        elif isinstance(current, (list, tuple)):
+            stack.extend(current)
+
+    return results
+
+
+def _iter_position_entries(user_state: Dict[str, Any]):
+    """Iterate over all position dictionaries within a user_state payload."""
+    seen: set[int] = set()
+    keys_to_scan = [
+        "assetPositions",
+        "assetPositionsPerDex",
+        "portfolioAssetPositions",
+        "crossAssetPositions",
+        "positions",
+    ]
+
+    any_found = False
+    for key in keys_to_scan:
+        container = user_state.get(key)
+        if container is None:
+            continue
+        any_found = True
+        for holder, position in _walk_position_nodes(container, seen):
+            yield holder, position
+
+    if not any_found:
+        for holder, position in _walk_position_nodes(user_state, seen):
+            yield holder, position
+
+
+def _compute_limit_price(
+    meta: AssetMeta,
+    is_buy: bool,
+    aggression: str,
+) -> float:
+    """Compute limit price based on aggression setting and available meta."""
+    if not meta.mid_px or meta.mid_px <= 0:
+        raise ValueError(f"Missing mid price for {meta.name}")
+
+    aggression = aggression or "join_best"
+    offset_bps = 0.0001  # 1 bp better than best bid/ask for top-of-book positioning
+
+    if aggression == "join_best":
+        # Top-of-book following: price slightly better than best bid/ask
+        candidate = meta.impact_bid if is_buy else meta.impact_ask
+        if candidate and candidate > 0:
+            # Buy: bid slightly higher to get to top of book
+            # Sell: ask slightly lower to get to top of book
+            factor = 1 + offset_bps if is_buy else 1 - offset_bps
+            return candidate * factor
+        # Fallback to mid if no impact prices available
+        factor = 1 + offset_bps if is_buy else 1 - offset_bps
+        return meta.mid_px * factor
+
+    if aggression == "mid":
+        return meta.mid_px
+
+    if aggression == "aggressive":
+        candidate = meta.impact_ask if is_buy else meta.impact_bid
+        if candidate and candidate > 0:
+            return candidate
+        factor = 1 + offset_bps if is_buy else 1 - offset_bps
+        return meta.mid_px * factor
+
+    # Fallback: treat as mid if unknown aggression keyword supplied.
+    return meta.mid_px
+
+
+def _compute_size_coin(delta_usd: float, meta: AssetMeta) -> Tuple[float, float]:
+    """Convert a USD delta into coin size respecting asset precision."""
+    if not meta.mid_px or meta.mid_px <= 0:
+        raise ValueError(f"Missing price for {meta.name}")
+
+    raw_size = abs(delta_usd) / meta.mid_px
+    size_coin = _round_down(raw_size, meta.sz_decimals)
+    return size_coin, meta.mid_px
+
+
+def _extract_order_id(response: Any) -> str:
+    """Best-effort extraction of order id from Hyperliquid responses."""
+    if isinstance(response, dict):
+        status = response.get("status")
+        if status == "err":
+            raise RuntimeError(response.get("error", "Unknown order error"))
+        if "error" in response and status is None:
+            raise RuntimeError(response["error"])
+
+        for key in ("resting", "filled", "orders", "statuses", "status", "data"):
+            if key in response:
+                try:
+                    return _extract_order_id(response[key])
+                except RuntimeError:
+                    raise
+                except Exception:
+                    continue
+
+        oid = response.get("oid")
+        if oid is not None:
+            return str(oid)
+
+    elif isinstance(response, list):
+        for item in response:
+            try:
+                oid = _extract_order_id(item)
+            except RuntimeError:
+                raise
+            if oid:
+                return oid
+
+    return ""
+
+
+def _collect_open_order_ids(info_client, account_address: str) -> List[str]:
+    """Fetch the current set of open order ids for an account."""
+    try:
+        open_orders = info_client.frontend_open_orders(account_address)
+    except Exception:
+        return []
+
+    if isinstance(open_orders, dict) and "data" in open_orders:
+        open_orders = open_orders["data"]
+
+    order_ids: List[str] = []
+    if isinstance(open_orders, list):
+        for entry in open_orders:
+            if isinstance(entry, dict):
+                oid = entry.get("oid")
+                if oid is not None:
+                    order_ids.append(str(oid))
+
+            # Some responses store child orders inside "children"
+            children = entry.get("children") if isinstance(entry, dict) else None
+            if isinstance(children, list):
+                for child in children:
+                    if isinstance(child, dict):
+                        child_oid = child.get("oid")
+                        if child_oid is not None:
+                            order_ids.append(str(child_oid))
+
+    return order_ids
 
 
 def get_current_positions(config) -> Dict[str, float]:
@@ -19,72 +439,84 @@ def get_current_positions(config) -> Dict[str, float]:
         Positive = long, negative = short
     """
     try:
-        from hyperliquid.info import Info
-        from hyperliquid.utils import constants
-
-        # Initialize Info API
-        info = Info(constants.MAINNET_API_URL if config.api.get("mainnet", True) else constants.TESTNET_API_URL)
-
-        # Get API key from environment
-        api_key = os.getenv("HYPERLIQUID_API_KEY")
-        if not api_key:
-            raise ValueError("HYPERLIQUID_API_KEY environment variable not set")
-
-        # Fetch user state
-        user_state = info.user_state(api_key)
-
-        # Parse positions
-        positions = {}
-        if "assetPositions" in user_state:
-            for pos_data in user_state["assetPositions"]:
-                pos = pos_data.get("position", {})
-                coin = pos.get("coin")
-                size = float(pos.get("szi", 0))  # Size (positive=long, negative=short)
-
-                if coin and size != 0:
-                    # Get mark price to convert to USD
-                    entry_px = float(pos.get("entryPx", 0))
-                    # Use mark price if available, otherwise entry price
-                    mark_px = entry_px  # Simplified - ideally get current mark price
-
-                    usd_value = size * mark_px
-                    positions[coin] = usd_value
-
-        print(f"Current positions: {len(positions)} assets")
-        return positions
-
+        Info, _, constants, _ = _load_hyperliquid_modules()
     except ImportError:
         raise ImportError(
             "hyperliquid package not installed. Run: pip install hyperliquid"
         )
-    except Exception as e:
-        print(f"Error fetching positions: {e}")
-        if config.dry_run:
-            return {}  # Return empty in dry-run mode
-        raise
+
+    base_url = _resolve_base_url(config, constants)
+
+    # Get main wallet address (where positions live)
+    # On Hyperliquid: API key is a vault that trades FOR the main wallet
+    # Positions live on the main wallet, not the API key vault
+    main_wallet = os.getenv("HYPERLIQUID_MAIN_WALLET")
+    if not main_wallet:
+        # Fallback: try API_KEY for backwards compatibility
+        main_wallet = os.getenv("HYPERLIQUID_API_KEY") or config.api_key
+        if not main_wallet:
+            raise ValueError(
+                "HYPERLIQUID_MAIN_WALLET or HYPERLIQUID_API_KEY environment variable not set"
+            )
+
+    user_states = _collect_user_states(base_url, main_wallet)
+    positions: Dict[str, float] = {}
+    dedupe_keys: set[Tuple[str, float, float]] = set()
+
+    for state in user_states:
+        if not isinstance(state, dict):
+            continue
+
+        for container, pos in _iter_position_entries(state):
+            coin = pos.get("coin")
+            size = _parse_float(pos.get("szi"))
+
+            if not coin or size is None or abs(size) < 1e-10:
+                continue
+
+            entry_px = _parse_float(pos.get("entryPx"))
+            mark_px = (
+                _parse_float(pos.get("markPx"))
+                or _parse_float(container.get("markPx") if isinstance(container, dict) else None)
+            )
+            position_value = _parse_float(pos.get("positionValue"))
+            if position_value is None and isinstance(container, dict):
+                position_value = _parse_float(container.get("positionValue"))
+            if position_value is None:
+                fallback_px = mark_px or entry_px
+                if fallback_px is None:
+                    continue
+                position_value = abs(size) * fallback_px
+
+            key = (
+                coin,
+                round(size, 12),
+                round(entry_px if entry_px is not None else 0.0, 6),
+            )
+            if key in dedupe_keys:
+                continue
+            dedupe_keys.add(key)
+
+            usd_value = position_value if size > 0 else -position_value
+            positions[coin] = positions.get(coin, 0.0) + usd_value
+
+    print(f"Current positions: {len(positions)} assets across {len(user_states)} dex snapshots")
+    return positions
 
 
 def execute_rebalance_with_stages(
     target_positions: Dict[str, float],
     current_positions: Dict[str, float],
-    config
+    config,
 ) -> Dict[str, Any]:
     """
     Execute rebalance with two-stage limit→market execution.
 
     Stage 1 (0-60 min): Place limit orders at mid/better prices
     Stage 2 (60+ min): Sweep unfilled with market orders
-
-    Args:
-        target_positions: Target positions in USD
-        current_positions: Current positions in USD
-        config: GradientConfig instance
-
-    Returns:
-        Execution summary dictionary
     """
-    # Calculate deltas
-    deltas = calculate_deltas(target_positions, current_positions)
+    min_threshold = config.execution.get("min_order_size_usd", 2.0)
+    deltas = calculate_deltas(target_positions, current_positions, min_threshold)
 
     if not deltas:
         print("No rebalancing needed (all positions within threshold)")
@@ -94,53 +526,74 @@ def execute_rebalance_with_stages(
             "stage1_filled": 0,
             "stage2_filled": 0,
             "total_turnover": 0.0,
-            "errors": []
+            "errors": [],
         }
 
     print(f"Executing rebalance for {len(deltas)} position adjustments")
+    sample = dict(list(deltas.items())[:5])
+    print(f"Sample deltas (USD): {sample}")
 
-    # Stage 1: Place limit orders
+    context = _prepare_hyperliquid_context(config)
     stage1_start = time.time()
-    stage1_orders, stage1_errors = place_limit_orders(deltas, config)
+
+    stage1_orders, stage1_errors = place_limit_orders(
+        deltas,
+        config,
+        context.info,
+        context.asset_meta,
+        context.exchange,
+    )
 
     if config.dry_run:
-        # In dry-run mode, simulate fills and skip monitoring
-        print(f"DRY-RUN: Would place {len(stage1_orders)} limit orders")
+        print("DRY-RUN: Skipping live monitoring and market sweep")
         return {
             "stage1_orders": stage1_orders,
             "stage2_orders": [],
             "stage1_filled": len(stage1_orders),
             "stage2_filled": 0,
             "total_turnover": sum(abs(o["size_usd"]) for o in stage1_orders),
-            "errors": stage1_errors
+            "errors": stage1_errors,
         }
 
-    # Monitor fills for up to passive_timeout_seconds
     timeout = config.execution.get("passive_timeout_seconds", 3600)
-    filled, unfilled = monitor_fills_with_timeout(stage1_orders, timeout, config)
+    filled, unfilled = monitor_fills_with_timeout(
+        stage1_orders,
+        timeout,
+        config,
+        context.info,
+    )
 
     stage1_time = time.time() - stage1_start
-    print(f"Stage 1 complete: {len(filled)}/{len(stage1_orders)} filled in {stage1_time:.1f}s")
+    print(
+        f"Stage 1 complete: {len(filled)}/{len(stage1_orders)} filled in "
+        f"{stage1_time:.1f}s"
+    )
 
-    # Stage 2: Sweep unfilled with market orders
-    stage2_orders = []
-    stage2_errors = []
+    stage2_orders: List[Dict[str, Any]] = []
+    stage2_errors: List[Dict[str, Any]] = []
 
-    if unfilled and stage1_time >= timeout:
-        print(f"Stage 2: Sweeping {len(unfilled)} unfilled orders with market orders")
+    if unfilled and context.exchange is not None:
+        if config.execution.get("cancel_before_market_sweep", True):
+            cancel_errors = cancel_orders(unfilled, config, context.exchange)
+            stage1_errors.extend(cancel_errors)
 
-        # Cancel unfilled limit orders
-        cancel_orders([o["order_id"] for o in unfilled], config)
+        unfilled_deltas = {
+            order["asset"]: order["size_usd"]
+            if order["side"] == "buy"
+            else -order["size_usd"]
+            for order in unfilled
+        }
 
-        # Convert unfilled to deltas
-        unfilled_deltas = {o["asset"]: o["size_usd"] for o in unfilled}
+        stage2_orders, stage2_errors = place_market_orders(
+            unfilled_deltas,
+            config,
+            context.info,
+            context.asset_meta,
+            context.exchange,
+        )
 
-        # Place market orders
-        stage2_orders, stage2_errors = place_market_orders(unfilled_deltas, config)
-
-    # Aggregate results
-    stage1_turnover = sum(abs(o["fill_usd"]) for o in filled)
-    stage2_turnover = sum(abs(o["fill_usd"]) for o in stage2_orders)
+    stage1_turnover = sum(abs(o.get("fill_usd", 0.0)) for o in filled)
+    stage2_turnover = sum(abs(o.get("fill_usd", 0.0)) for o in stage2_orders)
 
     return {
         "stage1_orders": stage1_orders,
@@ -148,14 +601,14 @@ def execute_rebalance_with_stages(
         "stage1_filled": len(filled),
         "stage2_filled": len(stage2_orders),
         "total_turnover": stage1_turnover + stage2_turnover,
-        "errors": stage1_errors + stage2_errors
+        "errors": stage1_errors + stage2_errors,
     }
 
 
 def calculate_deltas(
     target: Dict[str, float],
     current: Dict[str, float],
-    min_threshold: float = 10.0
+    min_threshold: float = 10.0,
 ) -> Dict[str, float]:
     """
     Calculate position deltas.
@@ -176,111 +629,156 @@ def calculate_deltas(
         current_size = current.get(asset, 0.0)
         delta = target_size - current_size
 
-        if abs(delta) > min_threshold:
+        if abs(delta) >= min_threshold:
             deltas[asset] = delta
 
     return deltas
 
 
-def place_limit_orders(deltas: Dict[str, float], config) -> Tuple[List[Dict], List[Dict]]:
+def place_limit_orders(
+    deltas: Dict[str, float],
+    config,
+    info_client,
+    asset_meta: Dict[str, AssetMeta],
+    exchange_client=None,
+) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
     """
     Place limit orders at mid price or better.
 
     Args:
         deltas: Position deltas in USD
         config: Configuration
+        info_client: Hyperliquid Info client
+        asset_meta: Mapping of asset -> metadata
+        exchange_client: Hyperliquid Exchange client (None in dry-run)
 
     Returns:
         Tuple of (orders, errors)
     """
-    from hyperliquid.exchange import Exchange
-    from hyperliquid.utils import constants
+    orders: List[Dict[str, Any]] = []
+    errors: List[Dict[str, Any]] = []
 
-    orders = []
-    errors = []
+    aggression = config.execution.get("limit_order_aggression", "join_best")
+    min_order_usd = config.execution.get("min_order_size_usd", 2.0)
 
-    if config.dry_run:
-        # Simulate order placement
-        for asset, delta_usd in deltas.items():
-            orders.append({
-                "asset": asset,
-                "side": "buy" if delta_usd > 0 else "sell",
-                "size_usd": abs(delta_usd),
-                "order_type": "limit",
-                "order_id": f"dry_run_{asset}_{int(time.time())}",
-                "status": "simulated"
-            })
-        return orders, errors
+    for asset, delta_usd in deltas.items():
+        meta = asset_meta.get(asset)
+        if not meta:
+            errors.append(
+                {"asset": asset, "error": "Missing asset metadata", "stage": "limit"}
+            )
+            continue
 
-    try:
-        # Initialize exchange
-        api_key = os.getenv("HYPERLIQUID_API_KEY")
-        api_secret = os.getenv("HYPERLIQUID_SECRET")
+        is_buy = delta_usd > 0
 
-        if not api_key or not api_secret:
-            raise ValueError("HYPERLIQUID_API_KEY and HYPERLIQUID_SECRET must be set")
+        try:
+            size_coin, reference_px = _compute_size_coin(delta_usd, meta)
+        except Exception as exc:
+            errors.append(
+                {"asset": asset, "error": str(exc), "stage": "sizing"}
+            )
+            continue
 
-        exchange = Exchange(
-            api_key,
-            constants.MAINNET_API_URL if config.api.get("mainnet", True) else constants.TESTNET_API_URL,
-            account_address=api_key
-        )
-
-        # Place orders
-        for asset, delta_usd in deltas.items():
-            try:
-                # Get current price (simplified - should fetch actual mid price)
-                # For now, we'll use a market order with limit price far from mid
-                is_buy = delta_usd > 0
-
-                # Convert USD to coin size (need current price)
-                # This is simplified - in production, fetch actual price
-                size_coin = abs(delta_usd) / 40000  # Placeholder: $40k per coin
-
-                # Place limit order
-                order_result = exchange.order(
-                    coin=asset,
-                    is_buy=is_buy,
-                    sz=size_coin,
-                    limit_px=None,  # Market price
-                    order_type={"limit": {"tif": "Gtc"}},  # Good-til-cancel
-                    reduce_only=False
-                )
-
-                orders.append({
+        if size_coin <= 0:
+            errors.append(
+                {
                     "asset": asset,
-                    "side": "buy" if is_buy else "sell",
-                    "size_usd": abs(delta_usd),
-                    "size_coin": size_coin,
-                    "order_type": "limit",
-                    "order_id": str(order_result.get("status", {}).get("resting", [{}])[0].get("oid", "")),
-                    "status": "placed"
-                })
+                    "error": "Order size truncated below minimum precision",
+                    "stage": "sizing",
+                }
+            )
+            continue
 
-            except Exception as e:
-                errors.append({
+        size_usd = size_coin * reference_px
+        if size_usd < min_order_usd:
+            errors.append(
+                {
                     "asset": asset,
-                    "error": str(e),
-                    "stage": "limit_order"
-                })
-                print(f"Error placing limit order for {asset}: {e}")
+                    "error": f"Size ${size_usd:.2f} below min_order_size_usd",
+                    "stage": "sizing",
+                }
+            )
+            continue
 
-    except Exception as e:
-        errors.append({
-            "asset": "ALL",
-            "error": str(e),
-            "stage": "exchange_init"
-        })
-        print(f"Error initializing exchange: {e}")
+        try:
+            limit_px = _compute_limit_price(meta, is_buy, aggression)
+            limit_px = _round_price(limit_px)
+        except Exception as exc:
+            errors.append(
+                {"asset": asset, "error": str(exc), "stage": "pricing"}
+            )
+            continue
+
+        order_record = {
+            "asset": asset,
+            "side": "buy" if is_buy else "sell",
+            "requested_usd": abs(delta_usd),
+            "size_usd": size_usd,
+            "size_coin": size_coin,
+            "order_type": "limit",
+            "limit_px": limit_px,
+            "status": "simulated" if config.dry_run else "placed",
+        }
+
+        if config.dry_run or exchange_client is None:
+            order_record["order_id"] = f"dry_run_{asset}_{int(time.time())}"
+            orders.append(order_record)
+            continue
+
+        try:
+            response = exchange_client.order(
+                name=asset,
+                is_buy=is_buy,
+                sz=size_coin,
+                limit_px=limit_px,
+                order_type={"limit": {"tif": "Gtc"}},  # Good-til-cancelled for reliable fills
+                reduce_only=False,
+            )
+            order_id = _extract_order_id(response)
+
+            # Log first response for debugging
+            if len(orders) == 0:
+                import logging
+                logger = logging.getLogger(__name__)
+                logger.info(f"First order response for {asset}:")
+                logger.info(f"  Type: {type(response)}")
+                logger.info(f"  Response: {response}")
+                logger.info(f"  Extracted order_id: {order_id}")
+
+            if not order_id:
+                print(f"WARNING: Failed to extract order_id for {asset}")
+                print(f"  Response type: {type(response)}")
+                print(f"  Response: {response}")
+                order_record["status"] = "unknown"
+                order_record["raw_response"] = response
+            else:
+                order_record["order_id"] = order_id
+            orders.append(order_record)
+        except Exception as exc:
+            errors.append(
+                {"asset": asset, "error": str(exc), "stage": "limit_order"}
+            )
+
+    if errors:
+        print(f"place_limit_orders encountered {len(errors)} errors")
+
+    if orders:
+        print(f"Successfully placed {len(orders)} limit orders")
+        # Log sample order details for debugging
+        if len(orders) > 0:
+            sample = orders[0]
+            print(f"  Sample order: {sample['asset']} {sample['side']} "
+                  f"{sample['size_coin']:.4f} @ ${sample['limit_px']:.6f}")
 
     return orders, errors
 
 
 def monitor_fills_with_timeout(
-    orders: List[Dict],
+    orders: List[Dict[str, Any]],
     timeout_seconds: int,
-    config
-) -> Tuple[List[Dict], List[Dict]]:
+    config,
+    info_client,
+) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
     """
     Monitor order fills via polling with timeout.
 
@@ -288,167 +786,206 @@ def monitor_fills_with_timeout(
         orders: List of order dictionaries
         timeout_seconds: Maximum time to wait
         config: Configuration
+        info_client: Hyperliquid Info client
 
     Returns:
         Tuple of (filled_orders, unfilled_orders)
     """
-    from hyperliquid.info import Info
-    from hyperliquid.utils import constants
+    if not orders:
+        return [], []
 
-    filled = []
-    unfilled = list(orders)
+    if config.dry_run:
+        filled = []
+        for order in orders:
+            filled.append(
+                {
+                    **order,
+                    "fill_usd": order["size_usd"],
+                    "fill_time": datetime.utcnow(),
+                }
+            )
+        return filled, []
+
+    api_key = os.getenv("HYPERLIQUID_API_KEY") or config.api_key
+    if not api_key:
+        raise ValueError("HYPERLIQUID_API_KEY environment variable not set")
+
     start_time = time.time()
+    outstanding: Dict[str, Dict[str, Any]] = {
+        order.get("order_id"): order
+        for order in orders
+        if order.get("order_id")
+    }
 
-    try:
-        info = Info(constants.MAINNET_API_URL if config.api.get("mainnet", True) else constants.TESTNET_API_URL)
-        api_key = os.getenv("HYPERLIQUID_API_KEY")
+    print(f"Monitoring {len(outstanding)}/{len(orders)} orders with valid order_ids")
+    if len(outstanding) == 0:
+        print("WARNING: No orders have order_ids - monitoring will exit immediately!")
+        return [], orders
 
-        while unfilled and (time.time() - start_time) < timeout_seconds:
-            # Poll every 10 seconds
-            time.sleep(10)
+    filled: List[Dict[str, Any]] = []
+    poll_interval = min(10, max(5, timeout_seconds // 12 or 5))
+    polls = 0
+    print(f"Poll interval: {poll_interval}s, timeout: {timeout_seconds}s")
 
-            # Check fill status
-            user_state = info.user_state(api_key)
-            open_orders = user_state.get("assetPositions", [])
+    while outstanding and (time.time() - start_time) < timeout_seconds:
+        time.sleep(poll_interval)
+        polls += 1
+        open_order_ids = set(_collect_open_order_ids(info_client, api_key))
 
-            # Check which orders are filled
-            still_unfilled = []
-            for order in unfilled:
-                # Check if order is still open (simplified)
-                order_id = order.get("order_id")
-                # In production: query specific order status
-                # For now: assume filled after some time
-                if time.time() - start_time > 300:  # 5 min simulation
-                    filled.append({**order, "fill_usd": order["size_usd"], "fill_time": datetime.now()})
-                else:
-                    still_unfilled.append(order)
+        newly_filled = 0
+        for order_id in list(outstanding.keys()):
+            if order_id not in open_order_ids:
+                order = outstanding.pop(order_id)
+                filled.append(
+                    {
+                        **order,
+                        "fill_usd": order["size_usd"],
+                        "fill_time": datetime.utcnow(),
+                    }
+                )
+                newly_filled += 1
 
-            unfilled = still_unfilled
+        if newly_filled > 0:
+            elapsed = time.time() - start_time
+            print(f"  Poll #{polls} ({elapsed:.1f}s): {newly_filled} new fills, "
+                  f"{len(filled)} total filled, {len(outstanding)} still open")
 
-            if not unfilled:
-                break
-
-    except Exception as e:
-        print(f"Error monitoring fills: {e}")
-
+    unfilled = list(outstanding.values())
+    if filled:
+        print(f"Fill monitoring complete: {len(filled)}/{len(filled) + len(unfilled)} filled")
     return filled, unfilled
 
 
-def place_market_orders(deltas: Dict[str, float], config) -> Tuple[List[Dict], List[Dict]]:
+def place_market_orders(
+    deltas: Dict[str, float],
+    config,
+    info_client,
+    asset_meta: Dict[str, AssetMeta],
+    exchange_client=None,
+) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
     """
     Place market orders for immediate execution.
 
     Args:
         deltas: Position deltas in USD
         config: Configuration
+        info_client: Hyperliquid Info client
+        asset_meta: Asset metadata map
+        exchange_client: Hyperliquid Exchange client
 
     Returns:
         Tuple of (filled_orders, errors)
     """
-    from hyperliquid.exchange import Exchange
-    from hyperliquid.utils import constants
+    filled: List[Dict[str, Any]] = []
+    errors: List[Dict[str, Any]] = []
 
-    filled = []
-    errors = []
-
-    if config.dry_run:
-        # Simulate market orders
-        for asset, delta_usd in deltas.items():
-            filled.append({
-                "asset": asset,
-                "side": "buy" if delta_usd > 0 else "sell",
-                "size_usd": abs(delta_usd),
-                "fill_usd": abs(delta_usd),
-                "order_type": "market",
-                "status": "filled_simulated"
-            })
+    if not deltas:
         return filled, errors
 
-    try:
-        api_key = os.getenv("HYPERLIQUID_API_KEY")
-        api_secret = os.getenv("HYPERLIQUID_SECRET")
+    for asset, delta_usd in deltas.items():
+        meta = asset_meta.get(asset)
+        if not meta:
+            errors.append(
+                {"asset": asset, "error": "Missing asset metadata", "stage": "market"}
+            )
+            continue
 
-        exchange = Exchange(
-            api_key,
-            constants.MAINNET_API_URL if config.api.get("mainnet", True) else constants.TESTNET_API_URL,
-            account_address=api_key
-        )
+        is_buy = delta_usd > 0
 
-        for asset, delta_usd in deltas.items():
-            try:
-                is_buy = delta_usd > 0
-                size_coin = abs(delta_usd) / 40000  # Placeholder
+        try:
+            size_coin, reference_px = _compute_size_coin(delta_usd, meta)
+        except Exception as exc:
+            errors.append(
+                {"asset": asset, "error": str(exc), "stage": "market_sizing"}
+            )
+            continue
 
-                # Place market order
-                order_result = exchange.market_open(
-                    coin=asset,
-                    is_buy=is_buy,
-                    sz=size_coin,
-                    reduce_only=False
-                )
-
-                filled.append({
+        if size_coin <= 0:
+            errors.append(
+                {
                     "asset": asset,
-                    "side": "buy" if is_buy else "sell",
-                    "size_usd": abs(delta_usd),
-                    "fill_usd": abs(delta_usd),
-                    "size_coin": size_coin,
-                    "order_type": "market",
-                    "status": "filled"
-                })
+                    "error": "Order size below minimum precision",
+                    "stage": "market_sizing",
+                }
+            )
+            continue
 
-            except Exception as e:
-                errors.append({
-                    "asset": asset,
-                    "error": str(e),
-                    "stage": "market_order"
-                })
-                print(f"Error placing market order for {asset}: {e}")
+        fill_usd = size_coin * reference_px
 
-    except Exception as e:
-        errors.append({
-            "asset": "ALL",
-            "error": str(e),
-            "stage": "exchange_init"
-        })
+        order_record = {
+            "asset": asset,
+            "side": "buy" if is_buy else "sell",
+            "size_usd": fill_usd,
+            "size_coin": size_coin,
+            "order_type": "market",
+            "status": "filled_simulated" if config.dry_run else "filled",
+        }
+        order_record["fill_usd"] = fill_usd
+
+        if config.dry_run or exchange_client is None:
+            filled.append(order_record)
+            continue
+
+        try:
+            response = exchange_client.market_open(
+                name=asset,
+                is_buy=is_buy,
+                sz=size_coin,
+                px=meta.mid_px,
+            )
+            order_id = _extract_order_id(response)
+            if order_id:
+                order_record["order_id"] = order_id
+            filled.append(order_record)
+        except Exception as exc:
+            errors.append(
+                {"asset": asset, "error": str(exc), "stage": "market_order"}
+            )
 
     return filled, errors
 
 
-def cancel_orders(order_ids: List[str], config) -> None:
+def cancel_orders(
+    orders: List[Dict[str, Any]],
+    config,
+    exchange_client,
+) -> List[Dict[str, Any]]:
     """
     Cancel open orders.
 
     Args:
-        order_ids: List of order IDs to cancel
+        orders: Orders to cancel
         config: Configuration
+        exchange_client: Hyperliquid Exchange client
+
+    Returns:
+        List of cancellation errors (empty on success)
     """
-    if config.dry_run:
-        print(f"DRY-RUN: Would cancel {len(order_ids)} orders")
-        return
+    if not orders:
+        return []
 
-    try:
-        from hyperliquid.exchange import Exchange
-        from hyperliquid.utils import constants
+    if config.dry_run or exchange_client is None:
+        print(f"DRY-RUN: Would cancel {len(orders)} orders")
+        return []
 
-        api_key = os.getenv("HYPERLIQUID_API_KEY")
-        api_secret = os.getenv("HYPERLIQUID_SECRET")
+    errors: List[Dict[str, Any]] = []
 
-        exchange = Exchange(
-            api_key,
-            constants.MAINNET_API_URL if config.api.get("mainnet", True) else constants.TESTNET_API_URL,
-            account_address=api_key
-        )
+    for order in orders:
+        order_id = order.get("order_id")
+        asset = order.get("asset")
 
-        for oid in order_ids:
-            try:
-                exchange.cancel(oid)
-                print(f"Cancelled order {oid}")
-            except Exception as e:
-                print(f"Error cancelling order {oid}: {e}")
+        if not order_id or not asset:
+            continue
 
-    except Exception as e:
-        print(f"Error cancelling orders: {e}")
+        try:
+            exchange_client.cancel(name=asset, oid=int(order_id))
+            print(f"Cancelled order {order_id} on {asset}")
+        except Exception as exc:
+            errors.append(
+                {"asset": asset, "error": str(exc), "stage": "cancel"}
+            )
+
+    return errors
 
 
 def validate_execution_results(results: Dict[str, Any], config) -> None:
@@ -468,20 +1005,27 @@ def validate_execution_results(results: Dict[str, Any], config) -> None:
         print("No orders placed (portfolio unchanged)")
         return
 
-    fill_rate = (stage1_filled + stage2_filled) / total_orders if total_orders > 0 else 0
+    fill_rate = (
+        (stage1_filled + stage2_filled) / total_orders if total_orders > 0 else 0
+    )
 
     if fill_rate < 0.95:
-        print(f"Warning: Low fill rate {fill_rate:.1%} ({stage1_filled + stage2_filled}/{total_orders})")
+        print(
+            f"Warning: Low fill rate {fill_rate:.1%} "
+            f"({stage1_filled + stage2_filled}/{total_orders})"
+        )
 
     if len(errors) > 0:
         print(f"Warning: {len(errors)} errors during execution:")
-        for err in errors[:5]:  # Show first 5 errors
+        for err in errors[:5]:
             print(f"  {err.get('asset', 'N/A')}: {err.get('error', 'Unknown error')}")
 
     total_turnover = results["total_turnover"]
-    turnover_pct = (total_turnover / config.capital_usd) * 100 if config.capital_usd > 0 else 0
+    turnover_pct = (
+        (total_turnover / config.capital_usd) * 100 if config.capital_usd > 0 else 0
+    )
 
-    print(f"Execution summary:")
+    print("Execution summary:")
     print(f"  Stage 1 (limit): {stage1_filled} filled")
     print(f"  Stage 2 (market): {stage2_filled} filled")
     print(f"  Total turnover: ${total_turnover:,.2f} ({turnover_pct:.1f}% of capital)")

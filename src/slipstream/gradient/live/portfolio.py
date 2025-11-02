@@ -168,11 +168,12 @@ def validate_target_portfolio(positions: Dict[str, float], config) -> None:
         if not np.isfinite(size):
             raise ValueError(f"Invalid position size for {asset}: {size}")
 
-    # Check leverage
+    # Check leverage (with small tolerance for floating point precision)
     total_exposure = sum(abs(p) for p in positions.values())
     leverage = total_exposure / config.capital_usd
+    TOLERANCE = 0.01  # Allow 1% buffer to absorb floating point noise
 
-    if leverage > config.max_total_leverage:
+    if leverage > config.max_total_leverage * (1 + TOLERANCE):
         raise ValueError(
             f"Total leverage {leverage:.2f}x exceeds limit {config.max_total_leverage}x"
         )

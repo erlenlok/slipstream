@@ -18,8 +18,8 @@ from slipstream.gradient.sensitivity import (
 from slipstream.gradient.live import cache as cache_module
 
 # Tunable request controls to play nicely with Hyperliquid's rate limits.
-# Conservative settings to avoid bans - reduced from 10 to 5 concurrent requests
-MAX_CONCURRENT_REQUESTS = 5
+# Prior runs with 5 concurrent requests still triggered sustained 429s, so default to 2.
+MAX_CONCURRENT_REQUESTS = 2
 MAX_REQUEST_ATTEMPTS = 6
 INITIAL_BACKOFF_SECONDS = 2.0  # Increased from 1.0 to be more conservative
 BACKOFF_FACTOR = 2.0

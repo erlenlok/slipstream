@@ -121,11 +121,24 @@ def run_rebalance():
             execution_results=execution_results,
             config=config
         )
-        tracker.log_positions(
-            timestamp=rebalance_timestamp,
-            positions=target_positions,
-            config=config
-        )
+
+        # Fetch and log ACTUAL positions from Hyperliquid (not targets)
+        try:
+            actual_positions = get_current_positions(config)
+            logger.info(f"Actual positions after rebalance: {len(actual_positions)} assets")
+            tracker.log_positions(
+                timestamp=rebalance_timestamp,
+                positions=actual_positions,
+                config=config
+            )
+        except Exception as e:
+            logger.warning(f"Failed to fetch actual positions for logging: {e}")
+            # Fallback to target positions if fetch fails
+            tracker.log_positions(
+                timestamp=rebalance_timestamp,
+                positions=target_positions,
+                config=config
+            )
 
         # Send Telegram notification
         if config.alerts_enabled:
