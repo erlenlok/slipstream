@@ -123,12 +123,20 @@ def main():
         help="EWMA span for volatility estimation in hours",
     )
 
+    parser.add_argument(
+        "--fee-rate",
+        type=float,
+        default=0.0,
+        help="Transaction fee rate as decimal (e.g., 0.000144 for 0.0144%%)",
+    )
+
     args = parser.parse_args()
 
     # Create configuration
     config = SensitivityConfig(
         lookback_spans=args.lookbacks,
         vol_span=args.vol_span,
+        fee_rate=args.fee_rate,
         n_pct_range=list(range(args.n_pct_min, args.n_pct_max + 1, args.n_pct_step)),
         rebalance_freqs_hours=list(range(args.rebal_min, args.rebal_max + 1, args.rebal_step)),
         n_samples=args.n_samples,
@@ -142,6 +150,7 @@ def main():
     print(f"Output directory: {args.output_dir}")
     print(f"Lookback spans: {config.lookback_spans}")
     print(f"Vol span: {config.vol_span}h")
+    print(f"Fee rate: {args.fee_rate:.6f} ({args.fee_rate * 100:.4f}%)")
     print(f"N% range: {args.n_pct_min}-{args.n_pct_max}% (step {args.n_pct_step})")
     print(f"Rebalance frequencies: {args.rebal_min}-{args.rebal_max}h (step {args.rebal_step})")
     print(f"Samples per config: {args.n_samples}")

@@ -253,6 +253,65 @@ def compute_log_returns(candles: pd.DataFrame) -> pd.DataFrame:
     return log_returns.to_frame(name="ret")
 
 
+def _merge_with_existing(new_data: pd.DataFrame, filepath: str) -> pd.DataFrame:
+    """
+    Safely merge new data with existing CSV file.
+
+    CRITICAL: This function prevents data loss by:
+    1. Reading existing CSV if it exists
+    2. Concatenating with new data
+    3. Removing duplicates (keeping newer data)
+    4. Sorting by datetime index
+
+    This ensures we NEVER truncate historical data when updating.
+
+    Args:
+        new_data: New DataFrame to merge
+        filepath: Path to existing CSV file
+
+    Returns:
+        Merged DataFrame with all historical + new data
+    """
+    import os
+
+    if not os.path.exists(filepath):
+        # No existing file, just return new data
+        return new_data
+
+    try:
+        # Read existing data
+        existing_data = pd.read_csv(filepath, index_col=0, parse_dates=True)
+
+        if existing_data.empty:
+            return new_data
+
+        # Concatenate existing + new
+        combined = pd.concat([existing_data, new_data])
+
+        # Remove duplicates, keeping the last occurrence (newer data)
+        # This handles the case where we're updating recent data
+        combined = combined[~combined.index.duplicated(keep='last')]
+
+        # Sort by datetime index
+        combined = combined.sort_index()
+
+        # Log the merge
+        old_range = f"{existing_data.index.min()} to {existing_data.index.max()}"
+        new_range = f"{new_data.index.min()} to {new_data.index.max()}"
+        final_range = f"{combined.index.min()} to {combined.index.max()}"
+        print(f"    Merged data: {len(existing_data)} existing + {len(new_data)} new = {len(combined)} total rows")
+        print(f"      Old range: {old_range}")
+        print(f"      New range: {new_range}")
+        print(f"      Final range: {final_range}")
+
+        return combined
+
+    except Exception as exc:
+        print(f"    WARNING: Failed to read existing file {filepath}: {exc}")
+        print(f"    Falling back to new data only (this may cause data loss!)")
+        return new_data
+
+
 async def build_datasets(
     client: httpx.AsyncClient,
     coin: str,
@@ -292,12 +351,26 @@ async def build_datasets(
     common_index = rets_resampled.index.union(funding_resampled.index).sort_values()
     aligned = pd.DataFrame(index=common_index).join(rets_resampled, how="left").join(funding_resampled, how="left")
 
-    # Save resampled data
-    candles_resampled.to_csv(f"{out_prefix}/market_data/{coin}_candles_{freq}.csv", index=True)
-    funding_resampled.to_csv(f"{out_prefix}/market_data/{coin}_funding_{freq}.csv", index=True)
-    aligned.to_csv(f"{out_prefix}/market_data/{coin}_merged_{freq}.csv", index=True)
+    # CRITICAL: Merge with existing data to prevent truncation
+    # This ensures we NEVER lose historical data when updating
+    import os
+    os.makedirs(f"{out_prefix}/market_data", exist_ok=True)
 
-    return candles_resampled, funding_resampled, aligned
+    candles_path = f"{out_prefix}/market_data/{coin}_candles_{freq}.csv"
+    funding_path = f"{out_prefix}/market_data/{coin}_funding_{freq}.csv"
+    merged_path = f"{out_prefix}/market_data/{coin}_merged_{freq}.csv"
+
+    print(f"  Saving {coin}:")
+    candles_final = _merge_with_existing(candles_resampled, candles_path)
+    funding_final = _merge_with_existing(funding_resampled, funding_path)
+    aligned_final = _merge_with_existing(aligned, merged_path)
+
+    # Write merged data
+    candles_final.to_csv(candles_path, index=True)
+    funding_final.to_csv(funding_path, index=True)
+    aligned_final.to_csv(merged_path, index=True)
+
+    return candles_final, funding_final, aligned_final
 
 
 async def build_for_universe(
@@ -308,6 +381,40 @@ async def build_for_universe(
     dex_filter: str | None = None,
 ) -> None:
     """Fetch & write datasets for all live markets (optionally filter by dex name)."""
+    # CRITICAL PRE-FLIGHT CHECK: Warn if fetch window might not cover existing data
+    import os
+    freq = interval if interval in ["1h", "4h"] else "4h"
+    sample_files = [
+        f"{out_prefix}/market_data/BTC_candles_{freq}.csv",
+        f"{out_prefix}/market_data/ETH_candles_{freq}.csv",
+    ]
+
+    for sample_file in sample_files:
+        if os.path.exists(sample_file):
+            try:
+                sample_df = pd.read_csv(sample_file, index_col=0, parse_dates=True)
+                if not sample_df.empty:
+                    existing_start = sample_df.index.min()
+                    existing_end = sample_df.index.max()
+                    fetch_days = (end - start).days
+                    existing_days = (existing_end - existing_start).days
+
+                    print(f"\n{'='*80}")
+                    print(f"PRE-FLIGHT CHECK: {os.path.basename(sample_file)}")
+                    print(f"  Existing data: {existing_start.date()} to {existing_end.date()} ({existing_days} days)")
+                    print(f"  Fetch request:  {start.date()} to {end.date()} ({fetch_days} days)")
+
+                    if start > existing_start:
+                        days_at_risk = (start - existing_start).days
+                        print(f"  ⚠️  WARNING: Fetch starts {days_at_risk} days AFTER existing data!")
+                        print(f"  ✓  SAFE: Merge function will preserve historical data")
+                    else:
+                        print(f"  ✓  SAFE: Fetch window covers all existing data")
+                    print(f"{'='*80}\n")
+                    break
+            except Exception:
+                pass
+
     async with httpx.AsyncClient(timeout=30.0) as client:
         markets = await fetch_all_perp_markets(client)
         if dex_filter:

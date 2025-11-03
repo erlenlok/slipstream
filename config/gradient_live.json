@@ -1,10 +1,10 @@
 {
-  "strategy": "gradient_momentum_35pct_4h",
+  "strategy": "gradient_momentum_10pct_4h",
   "capital_usd": 400,
   "max_position_pct": 10,
   "max_total_leverage": 2.0,
-  "concentration_pct": 10,
-  "rebalance_freq_hours": 4,
+  "concentration_pct": 30,
+  "rebalance_freq_hours": 20,
   "weight_scheme": "inverse_vol",
   "lookback_spans": [2, 4, 8, 16, 32, 64, 128, 256, 512, 1024],
   "vol_span": 24,

@@ -22,6 +22,9 @@ class SensitivityConfig:
     liquidity_threshold: float = 10_000.0  # USD trade size
     liquidity_impact_pct: float = 2.5  # Max % of ADV
 
+    # Transaction costs
+    fee_rate: float = 0.0  # Trading fee as decimal (e.g., 0.000144 for 0.0144%)
+
     # Sensitivity sweep parameters
     n_pct_range: List[float] = None  # e.g., [1, 2, 3, ..., 50]
     rebalance_freqs_hours: List[int] = None  # e.g., [4, 8, 12, ..., 48]
@@ -351,7 +354,8 @@ def run_concentration_backtest(
     n_pct: float,
     rebalance_freq_hours: int,
     weight_scheme: Literal["equal", "inverse_vol"],
-    candle_freq_hours: int = 4
+    candle_freq_hours: int = 4,
+    fee_rate: float = 0.0
 ) -> float:
     """
     Run a single concentration backtest over a period.
@@ -364,6 +368,7 @@ def run_concentration_backtest(
         rebalance_freq_hours: Rebalancing frequency in hours
         weight_scheme: "equal" or "inverse_vol"
         candle_freq_hours: Candle frequency in hours (default 4h)
+        fee_rate: Trading fee as decimal (e.g., 0.000144 for 0.0144%)
 
     Returns:
         Annualized return over the period
@@ -433,6 +438,18 @@ def run_concentration_backtest(
         if len(short_assets) > 0:
             short_weights = compute_weights(short_assets, "short")
             new_weights.update(short_weights.to_dict())
+
+        # Calculate turnover and apply transaction costs
+        if fee_rate > 0:
+            # Turnover = sum of absolute weight changes
+            all_assets = set(new_weights.keys()) | set(current_weights.keys())
+            turnover = sum(
+                abs(new_weights.get(asset, 0.0) - current_weights.get(asset, 0.0))
+                for asset in all_assets
+            )
+            # Deduct costs from portfolio value
+            cost = turnover * fee_rate
+            portfolio_value *= (1 - cost)
 
         # Calculate returns until next rebalance (or end of period)
         next_rebal_idx = i + 1
@@ -560,7 +577,8 @@ def run_sensitivity_sweep(
                         end_time=sample["end_time"],
                         n_pct=n_pct,
                         rebalance_freq_hours=rebal_freq,
-                        weight_scheme=weight_scheme
+                        weight_scheme=weight_scheme,
+                        fee_rate=config.fee_rate
                     )
 
                     if not np.isnan(period_return):
