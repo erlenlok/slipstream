@@ -47,9 +47,59 @@ async def send_telegram_rebalance_alert(
         stage2_filled = rebalance_data.get("stage2_filled", 0)
         errors = rebalance_data.get("errors", 0)
         dry_run = rebalance_data.get("dry_run", True)
+        total_orders = rebalance_data.get("total_orders", stage1_filled + stage2_filled)
+        passive_rate = rebalance_data.get("passive_fill_rate")
+        aggressive_rate = rebalance_data.get("aggressive_fill_rate")
+        passive_slip = rebalance_data.get("passive_slippage") or {}
+        aggressive_slip = rebalance_data.get("aggressive_slippage") or {}
+        total_slip = rebalance_data.get("total_slippage") or {}
+        stage2_highlights = rebalance_data.get("stage2_highlights") or []
+        signal_tracking = rebalance_data.get("signal_tracking") or {}
+        tracking_metrics = signal_tracking.get("metrics") or {}
 
         status_emoji = "✅" if errors == 0 else "⚠️"
         mode_tag = "[DRY-RUN]" if dry_run else "[LIVE]"
+
+        def format_rate(filled: int, rate: Optional[float]) -> str:
+            base = f"{filled}/{total_orders}" if total_orders else f"{filled}"
+            return f"{base} ({rate:.1%})" if rate is not None else base
+
+        def format_slippage(stats: Dict[str, Any]) -> str:
+            notional = stats.get("total_usd")
+            bps = stats.get("weighted_bps")
+            if notional is None or bps is None:
+                return "n/a"
+            return f"{bps:+.2f} bps on ${notional:,.0f}"
+
+        fallback_lines = ""
+        if stage2_highlights:
+            formatted_lines = []
+            for item in stage2_highlights:
+                asset = item.get("asset", "N/A")
+                notional = item.get("notional_usd", 0.0)
+                slip = item.get("slippage_bps")
+                slip_str = "n/a" if slip is None else f"{slip:+.2f} bps"
+                formatted_lines.append(f"  • {asset}: ${notional:,.0f} at {slip_str}")
+            fallback_lines = "\n🚨 **Fallback Fills**:\n" + "\n".join(formatted_lines)
+        signal_lines = ""
+        if signal_tracking and tracking_metrics:
+            forecast_ts = signal_tracking.get("forecast_timestamp", "n/a")
+            corr = tracking_metrics.get("pearson_corr")
+            hit = tracking_metrics.get("hit_rate")
+            mae = tracking_metrics.get("mae")
+            rmse = tracking_metrics.get("rmse")
+
+            corr_str = f"{corr:.3f}" if isinstance(corr, (int, float)) else "n/a"
+            hit_str = f"{hit:.1%}" if isinstance(hit, (int, float)) else "n/a"
+            mae_str = f"{mae:.4f}" if isinstance(mae, (int, float)) else "n/a"
+            rmse_str = f"{rmse:.4f}" if isinstance(rmse, (int, float)) else "n/a"
+
+            signal_lines = (
+                "\n📈 **Signal Tracking**:\n"
+                f"  • Forecast @ {forecast_ts}\n"
+                f"  • Corr: {corr_str} | Hit: {hit_str}\n"
+                f"  • MAE: {mae_str} | RMSE: {rmse_str}"
+            )
 
         message = f"""
 {status_emoji} **Gradient Rebalance Complete** {mode_tag}
@@ -63,10 +113,17 @@ async def send_telegram_rebalance_alert(
 
 💰 **Execution**:
   • Turnover: ${turnover:,.2f}
-  • Stage 1 (passive): {stage1_filled} fills
-  • Stage 2 (aggressive): {stage2_filled} fills
+  • Stage 1 (passive): {format_rate(stage1_filled, passive_rate)}
+  • Stage 2 (aggressive): {format_rate(stage2_filled, aggressive_rate)}
   • Errors: {errors}
 
+📉 **Slippage (bps | $)**:
+  • Stage 1: {format_slippage(passive_slip)}
+  • Stage 2: {format_slippage(aggressive_slip)}
+  • Total: {format_slippage(total_slip)}
+
+{signal_lines}
+{fallback_lines}
 {'⚠️ DRY-RUN MODE - No real orders placed' if dry_run else '✅ Live positions entered'}
 """
 

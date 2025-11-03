@@ -28,6 +28,7 @@ class HyperliquidContext:
     info: Any
     exchange: Optional[Any]
     asset_meta: Dict[str, AssetMeta]
+    account_address: Optional[str] = None
 
 
 def _load_hyperliquid_modules():
@@ -98,9 +99,224 @@ def _round_down(value: float, decimals: int) -> float:
     return math.floor(value * factor) / factor
 
 
-def _round_price(price: float, decimals: int = 6) -> float:
-    """Round price to a sensible default precision for perps."""
-    return round(price, decimals)
+def _round_price(price: float, sz_decimals: int = 0) -> float:
+    """
+    Round price following Hyperliquid's official formula.
+
+    Hyperliquid uses:
+    1. 5 significant figures (via .5g format)
+    2. Then rounds to (6 - sz_decimals) decimal places for perps
+
+    This ensures prices respect the exchange's tick size requirements.
+
+    Args:
+        price: Price to round
+        sz_decimals: Asset's szDecimals from metadata (default 0)
+
+    Returns:
+        Properly rounded price that respects Hyperliquid tick sizes
+
+    Examples:
+        BTC (sz_decimals=5): 6-5=1 decimal → $107485.0
+        ETH (sz_decimals=4): 6-4=2 decimals → $3709.60
+        PENDLE (sz_decimals=0): 6-0=6 decimals → $2.798800
+    """
+    # Round to 5 significant figures first, then to proper decimal places
+    decimal_places = 6 - sz_decimals
+    return round(float(f"{price:.5g}"), decimal_places)
+
+
+def _price_tick(meta: AssetMeta) -> float:
+    """Return the minimum price increment implied by sz_decimals."""
+    price_decimals = max(0, 6 - int(meta.sz_decimals))
+    return 10 ** (-price_decimals) if price_decimals > 0 else 1.0
+
+
+def _ensure_passive_price(price: float, meta: AssetMeta, is_buy: bool) -> float:
+    """Adjust price so that rounding keeps the order on the passive side."""
+    tick_size = _price_tick(meta)
+    bid = meta.impact_bid if meta.impact_bid and meta.impact_bid > 0 else None
+    ask = meta.impact_ask if meta.impact_ask and meta.impact_ask > 0 else None
+
+    candidate = max(price, tick_size)
+
+    for _ in range(50):
+        rounded = _round_price(candidate, meta.sz_decimals)
+        if rounded <= 0:
+            return tick_size
+
+        if is_buy:
+            if ask and rounded >= ask:
+                candidate -= tick_size
+                if candidate <= 0:
+                    return tick_size
+                continue
+            return rounded
+
+        if bid and rounded <= bid:
+            candidate += tick_size
+            continue
+        return rounded
+
+    # Fallback: return best-effort rounded price after iterations
+    return _round_price(max(price, tick_size), meta.sz_decimals)
+
+
+def _calculate_slippage_bps(
+    execution_px: Optional[float],
+    mid_px: Optional[float],
+    is_buy: bool,
+) -> Optional[float]:
+    """Return slippage in bps versus the prevailing mid price."""
+    if not execution_px or execution_px <= 0:
+        return None
+    if not mid_px or mid_px <= 0:
+        return None
+
+    if is_buy:
+        return ((execution_px - mid_px) / mid_px) * 1e4
+    return ((mid_px - execution_px) / mid_px) * 1e4
+
+
+def _aggregate_slippage_metrics(orders: List[Dict[str, Any]]) -> Dict[str, Any]:
+    """Aggregate slippage metrics for a collection of filled orders."""
+    total_usd = 0.0
+    weighted_sum = 0.0
+    count = 0
+    avg_sum = 0.0
+
+    for order in orders:
+        slippage = order.get("slippage_bps")
+        notional = abs(order.get("fill_usd") or order.get("size_usd") or 0.0)
+        if slippage is None or notional <= 0:
+            continue
+        total_usd += notional
+        weighted_sum += slippage * notional
+        avg_sum += slippage
+        count += 1
+
+    weighted_bps = weighted_sum / total_usd if total_usd > 0 else None
+    avg_bps = avg_sum / count if count > 0 else None
+
+    return {
+        "count": count,
+        "total_usd": total_usd,
+        "weighted_bps": weighted_bps,
+        "avg_bps": avg_bps,
+    }
+
+
+def _combine_slippage_stats(stats_a: Dict[str, Any], stats_b: Dict[str, Any]) -> Dict[str, Any]:
+    """Combine two slippage stats dictionaries."""
+    total_usd = (stats_a.get("total_usd", 0.0) or 0.0) + (stats_b.get("total_usd", 0.0) or 0.0)
+    count = (stats_a.get("count", 0) or 0) + (stats_b.get("count", 0) or 0)
+
+    weighted_sum = 0.0
+    if stats_a.get("weighted_bps") is not None and stats_a.get("total_usd", 0) > 0:
+        weighted_sum += stats_a["weighted_bps"] * stats_a["total_usd"]
+    if stats_b.get("weighted_bps") is not None and stats_b.get("total_usd", 0) > 0:
+        weighted_sum += stats_b["weighted_bps"] * stats_b["total_usd"]
+
+    avg_sum = 0.0
+    if stats_a.get("avg_bps") is not None and stats_a.get("count", 0) > 0:
+        avg_sum += stats_a["avg_bps"] * stats_a["count"]
+    if stats_b.get("avg_bps") is not None and stats_b.get("count", 0) > 0:
+        avg_sum += stats_b["avg_bps"] * stats_b["count"]
+
+    weighted_bps = weighted_sum / total_usd if total_usd > 0 else None
+    avg_bps = avg_sum / count if count > 0 else None
+
+    return {
+        "count": count,
+        "total_usd": total_usd,
+        "weighted_bps": weighted_bps,
+        "avg_bps": avg_bps,
+    }
+
+
+def _enrich_orders_with_actual_fills(
+    info_client,
+    account_address: Optional[str],
+    filled_stage1: List[Dict[str, Any]],
+    stage2_orders: List[Dict[str, Any]],
+    start_timestamp: float,
+) -> None:
+    """Fetch actual fills and update order records with executed pricing."""
+    if not account_address:
+        return
+
+    try:
+        start_ms = int(max(0, (start_timestamp - 120) * 1000))  # include 2-minute buffer
+        end_ms = int(time.time() * 1000) + 1000
+        fills = info_client.user_fills_by_time(
+            account_address,
+            start_ms,
+            end_ms,
+            aggregate_by_time=True,
+        )
+    except Exception as exc:
+        print(f"Warning: Failed to fetch user fills for slippage enrichment: {exc}")
+        return
+
+    if not isinstance(fills, list):
+        return
+
+    order_lookup: Dict[str, Dict[str, Any]] = {}
+    fill_accum: Dict[str, Dict[str, Any]] = {}
+
+    for order in filled_stage1 + stage2_orders:
+        oid = order.get("order_id")
+        if oid is None:
+            continue
+        order_lookup[str(oid)] = order
+
+    for entry in fills:
+        oid = entry.get("oid")
+        if oid is None:
+            continue
+        order = order_lookup.get(str(oid))
+        if not order:
+            continue
+
+        size = _parse_float(entry.get("sz"))
+        price = _parse_float(entry.get("px"))
+        timestamp = entry.get("time")
+
+        if size is None or price is None or abs(size) <= 0 or price <= 0:
+            continue
+
+        record = fill_accum.setdefault(
+            str(oid),
+            {"total_sz": 0.0, "weighted_px": 0.0, "latest_time": 0},
+        )
+        abs_size = abs(size)
+        record["total_sz"] += abs_size
+        record["weighted_px"] += price * abs_size
+        if isinstance(timestamp, (int, float)):
+            record["latest_time"] = max(record["latest_time"], int(timestamp))
+
+    for oid, accum in fill_accum.items():
+        order = order_lookup.get(oid)
+        if not order:
+            continue
+
+        total_sz = accum["total_sz"]
+        if total_sz <= 0:
+            continue
+
+        avg_px = accum["weighted_px"] / total_sz
+        order["execution_px"] = avg_px
+        order["fill_price"] = avg_px
+        order["size_coin"] = total_sz
+        order["fill_usd"] = avg_px * total_sz
+        order["size_usd"] = order.get("size_usd") or order["fill_usd"]
+
+        reference_mid = order.get("reference_mid")
+        is_buy = order.get("side") == "buy"
+        order["slippage_bps"] = _calculate_slippage_bps(avg_px, reference_mid, is_buy)
+
+        if accum["latest_time"]:
+            order["fill_time"] = datetime.fromtimestamp(accum["latest_time"] / 1000.0)
 
 
 def _fetch_meta_and_asset_ctxs(info_client) -> Tuple[Dict[str, Any], List[Dict[str, Any]]]:
@@ -179,6 +395,7 @@ def _prepare_hyperliquid_context(config) -> HyperliquidContext:
     asset_meta = _build_asset_meta(info_client, meta_payload, asset_ctxs)
 
     exchange_client = None
+    account_address: Optional[str] = None
     if not config.dry_run:
         api_secret = os.getenv("HYPERLIQUID_API_SECRET") or config.api_secret
         api_key = os.getenv("HYPERLIQUID_API_KEY") or config.api_key
@@ -203,11 +420,13 @@ def _prepare_hyperliquid_context(config) -> HyperliquidContext:
             meta=meta_payload,
             account_address=wallet.address,
         )
+        account_address = wallet.address
 
     return HyperliquidContext(
         info=info_client,
         exchange=exchange_client,
         asset_meta=asset_meta,
+        account_address=account_address,
     )
 
 
@@ -324,33 +543,45 @@ def _compute_limit_price(
     if not meta.mid_px or meta.mid_px <= 0:
         raise ValueError(f"Missing mid price for {meta.name}")
 
-    aggression = aggression or "join_best"
-    offset_bps = 0.0001  # 1 bp better than best bid/ask for top-of-book positioning
+    aggression = (aggression or "join_best").lower()
+    offset_bps = 0.0001  # 1 bp guard used when we need to fallback without book data
+
+    bid = meta.impact_bid if meta.impact_bid and meta.impact_bid > 0 else None
+    ask = meta.impact_ask if meta.impact_ask and meta.impact_ask > 0 else None
+    tick_size = _price_tick(meta)
 
     if aggression == "join_best":
-        # Top-of-book following: price slightly better than best bid/ask
-        candidate = meta.impact_bid if is_buy else meta.impact_ask
-        if candidate and candidate > 0:
-            # Buy: bid slightly higher to get to top of book
-            # Sell: ask slightly lower to get to top of book
-            factor = 1 + offset_bps if is_buy else 1 - offset_bps
-            return candidate * factor
-        # Fallback to mid if no impact prices available
-        factor = 1 + offset_bps if is_buy else 1 - offset_bps
-        return meta.mid_px * factor
+        price = meta.mid_px
+
+        if is_buy:
+            if bid:
+                price = bid
+            elif ask:
+                price = max(ask - tick_size, tick_size)
+            else:
+                price = meta.mid_px * (1 - offset_bps)
+        else:
+            if ask:
+                price = ask
+            elif bid:
+                price = bid + tick_size
+            else:
+                price = meta.mid_px * (1 + offset_bps)
+
+        return _ensure_passive_price(price, meta, is_buy)
 
     if aggression == "mid":
-        return meta.mid_px
+        return _round_price(meta.mid_px, meta.sz_decimals)
 
     if aggression == "aggressive":
         candidate = meta.impact_ask if is_buy else meta.impact_bid
         if candidate and candidate > 0:
-            return candidate
+            return _round_price(candidate, meta.sz_decimals)
         factor = 1 + offset_bps if is_buy else 1 - offset_bps
-        return meta.mid_px * factor
+        return _round_price(meta.mid_px * factor, meta.sz_decimals)
 
     # Fallback: treat as mid if unknown aggression keyword supplied.
-    return meta.mid_px
+    return _round_price(meta.mid_px, meta.sz_decimals)
 
 
 def _compute_size_coin(delta_usd: float, meta: AssetMeta) -> Tuple[float, float]:
@@ -592,8 +823,39 @@ def execute_rebalance_with_stages(
             context.exchange,
         )
 
+    if not config.dry_run:
+        _enrich_orders_with_actual_fills(
+            context.info,
+            context.account_address,
+            filled,
+            stage2_orders,
+            stage1_start,
+        )
+
     stage1_turnover = sum(abs(o.get("fill_usd", 0.0)) for o in filled)
     stage2_turnover = sum(abs(o.get("fill_usd", 0.0)) for o in stage2_orders)
+
+    passive_stats = _aggregate_slippage_metrics(filled)
+    aggressive_stats = _aggregate_slippage_metrics(stage2_orders)
+    total_stats = _combine_slippage_stats(passive_stats, aggressive_stats)
+
+    total_orders = len(stage1_orders)
+    passive_fill_rate = len(filled) / total_orders if total_orders > 0 else 0.0
+    aggressive_fill_rate = len(stage2_orders) / total_orders if total_orders > 0 else 0.0
+
+    stage2_highlights = sorted(
+        [
+            {
+                "asset": order.get("asset"),
+                "side": order.get("side"),
+                "notional_usd": abs(order.get("fill_usd", 0.0)),
+                "slippage_bps": order.get("slippage_bps"),
+            }
+            for order in stage2_orders
+        ],
+        key=lambda item: item["notional_usd"],
+        reverse=True,
+    )[:5]
 
     return {
         "stage1_orders": stage1_orders,
@@ -602,6 +864,12 @@ def execute_rebalance_with_stages(
         "stage2_filled": len(stage2_orders),
         "total_turnover": stage1_turnover + stage2_turnover,
         "errors": stage1_errors + stage2_errors,
+        "passive_slippage": passive_stats,
+        "aggressive_slippage": aggressive_stats,
+        "total_slippage": total_stats,
+        "passive_fill_rate": passive_fill_rate,
+        "aggressive_fill_rate": aggressive_fill_rate,
+        "stage2_highlights": stage2_highlights,
     }
 
 
@@ -702,12 +970,17 @@ def place_limit_orders(
 
         try:
             limit_px = _compute_limit_price(meta, is_buy, aggression)
-            limit_px = _round_price(limit_px)
         except Exception as exc:
             errors.append(
                 {"asset": asset, "error": str(exc), "stage": "pricing"}
             )
             continue
+
+        reference_mid = meta.mid_px
+        slippage_bps = _calculate_slippage_bps(limit_px, reference_mid, is_buy)
+        spread_bps = None
+        if meta.impact_bid and meta.impact_ask and meta.impact_bid > 0:
+            spread_bps = ((meta.impact_ask - meta.impact_bid) / meta.impact_bid) * 1e4
 
         order_record = {
             "asset": asset,
@@ -718,6 +991,12 @@ def place_limit_orders(
             "order_type": "limit",
             "limit_px": limit_px,
             "status": "simulated" if config.dry_run else "placed",
+            "execution_px": limit_px,
+            "reference_mid": reference_mid,
+            "reference_bid": meta.impact_bid,
+            "reference_ask": meta.impact_ask,
+            "slippage_bps": slippage_bps,
+            "spread_bps": spread_bps,
         }
 
         if config.dry_run or exchange_client is None:
@@ -802,6 +1081,7 @@ def monitor_fills_with_timeout(
                     **order,
                     "fill_usd": order["size_usd"],
                     "fill_time": datetime.utcnow(),
+                    "fill_price": order.get("execution_px"),
                 }
             )
         return filled, []
@@ -841,6 +1121,7 @@ def monitor_fills_with_timeout(
                         **order,
                         "fill_usd": order["size_usd"],
                         "fill_time": datetime.utcnow(),
+                        "fill_price": order.get("execution_px"),
                     }
                 )
                 newly_filled += 1
@@ -910,15 +1191,25 @@ def place_market_orders(
             )
             continue
 
-        fill_usd = size_coin * reference_px
+        execution_px = meta.impact_ask if is_buy else meta.impact_bid
+        if not execution_px or execution_px <= 0:
+            execution_px = reference_px
+        fill_usd = size_coin * execution_px
+        slippage_bps = _calculate_slippage_bps(execution_px, meta.mid_px, is_buy)
 
         order_record = {
             "asset": asset,
             "side": "buy" if is_buy else "sell",
+            "requested_usd": abs(delta_usd),
             "size_usd": fill_usd,
             "size_coin": size_coin,
             "order_type": "market",
             "status": "filled_simulated" if config.dry_run else "filled",
+            "execution_px": execution_px,
+            "reference_mid": meta.mid_px,
+            "reference_bid": meta.impact_bid,
+            "reference_ask": meta.impact_ask,
+            "slippage_bps": slippage_bps,
         }
         order_record["fill_usd"] = fill_usd
 

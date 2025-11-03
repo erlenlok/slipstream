@@ -406,6 +406,8 @@ def compute_live_signals(market_data: Dict[str, Any], config) -> pd.DataFrame:
     # Drop any rows with missing values
     signals = signals.dropna()
 
+    signals["signal_timestamp"] = pd.to_datetime(latest_time)
+
     print(f"Computed signals for {len(signals)} assets (latest timestamp: {latest_time})")
 
     return signals
