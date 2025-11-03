@@ -603,7 +603,16 @@ def _extract_order_id(response: Any) -> str:
         if "error" in response and status is None:
             raise RuntimeError(response["error"])
 
-        for key in ("resting", "filled", "orders", "statuses", "status", "data"):
+        # Some responses nest inside "response" then "data" → "statuses" → ...
+        for key in (
+            "response",
+            "data",
+            "resting",
+            "filled",
+            "orders",
+            "statuses",
+            "status",
+        ):
             if key in response:
                 try:
                     return _extract_order_id(response[key])
@@ -624,6 +633,9 @@ def _extract_order_id(response: Any) -> str:
                 raise
             if oid:
                 return oid
+
+    elif isinstance(response, (int, float)):
+        return str(response)
 
     return ""
 

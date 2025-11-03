@@ -6,6 +6,7 @@ from slipstream.gradient.live.execution import (
     _price_tick,
     _calculate_slippage_bps,
     _aggregate_slippage_metrics,
+    _extract_order_id,
 )
 from slipstream.gradient.live.performance import compute_signal_tracking_metrics
 
@@ -121,3 +122,25 @@ def test_compute_signal_tracking_metrics_empty():
     assert metrics["rmse"] is None
     assert metrics["hit_rate"] is None
     assert metrics["pearson_corr"] is None
+
+
+def test_extract_order_id_handles_nested_response():
+    response = {
+        "status": "ok",
+        "response": {
+            "type": "order",
+            "data": {
+                "statuses": [
+                    {
+                        "filled": {
+                            "totalSz": "0.045",
+                            "avgPx": "463.83",
+                            "oid": 221329737449,
+                        }
+                    }
+                ]
+            },
+        },
+    }
+
+    assert _extract_order_id(response) == "221329737449"
