@@ -6,7 +6,7 @@ import math
 import os
 import time
 from collections import defaultdict
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any, Dict, List, Optional, Tuple, Iterable
 
@@ -30,6 +30,7 @@ class HyperliquidContext:
     exchange: Optional[Any]
     asset_meta: Dict[str, AssetMeta]
     account_address: Optional[str] = None
+    meta_timestamp: Dict[str, float] = field(default_factory=dict)
 
 
 def _load_hyperliquid_modules():
@@ -205,13 +206,39 @@ PASSIVE_REPRICE_MIN_SPREAD_BPS = 0.5
 PASSIVE_STABILITY_DELAY_SECONDS = 1.0
 PASSIVE_MAX_REPRICES = 6
 PASSIVE_CANCEL_COOLDOWN_SECONDS = 0.5
+PASSIVE_META_REFRESH_SECONDS = 15.0
 
 
 def _refresh_asset_meta_for_assets(context, assets: Optional[Iterable[str]] = None) -> Dict[str, AssetMeta]:
-    """Refresh asset metadata and optionally return a subset."""
+    """Refresh asset metadata and optionally return a subset.
+
+    To avoid hammering the API, only refresh if the cached snapshot is stale.
+    """
+    now = time.time()
+
+    if assets is not None:
+        assets = list(assets)
+        stale_assets = [
+            asset
+            for asset in assets
+            if context.meta_timestamp.get(asset, 0.0) + PASSIVE_META_REFRESH_SECONDS <= now
+        ]
+        if not stale_assets:
+            return {asset: context.asset_meta.get(asset) for asset in assets}
+    else:
+        stale_assets = None
+        if (
+            context.meta_timestamp
+            and all(now - ts <= PASSIVE_META_REFRESH_SECONDS for ts in context.meta_timestamp.values())
+        ):
+            return context.asset_meta
+
     meta_payload, asset_ctxs = _fetch_meta_and_asset_ctxs(context.info)
     refreshed = _build_asset_meta(context.info, meta_payload, asset_ctxs)
     context.asset_meta.update(refreshed)
+    refreshed_ts = time.time()
+    context.meta_timestamp.update({name: refreshed_ts for name in refreshed})
+
     if assets is None:
         return context.asset_meta
     return {asset: context.asset_meta.get(asset) for asset in assets}
@@ -505,11 +532,14 @@ def _prepare_hyperliquid_context(config) -> HyperliquidContext:
         )
         account_address = wallet.address
 
+    now = time.time()
+
     return HyperliquidContext(
         info=info_client,
         exchange=exchange_client,
         asset_meta=asset_meta,
         account_address=account_address,
+        meta_timestamp={name: now for name in asset_meta},
     )
 
 
@@ -1159,7 +1189,7 @@ def place_limit_orders(
             )
             continue
 
-        is_buy = delta_usd > 0
+        is_buy = bool(delta_usd > 0)
 
         try:
             size_coin, reference_px = _compute_size_coin(delta_usd, meta)
