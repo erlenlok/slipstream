@@ -5,9 +5,10 @@ from __future__ import annotations
 import math
 import os
 import time
+from collections import defaultdict
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple, Iterable
 
 
 @dataclass
@@ -194,6 +195,70 @@ def _calculate_slippage_bps(
     if is_buy:
         return ((execution_px - mid_px) / mid_px) * 1e4
     return ((mid_px - execution_px) / mid_px) * 1e4
+
+
+# Passive order management heuristics
+PASSIVE_MONITOR_SLICE_SECONDS = 20
+PASSIVE_MIN_REST_BEFORE_REPRICE = 6
+PASSIVE_REPRICE_TICK_THRESHOLD = 1
+PASSIVE_REPRICE_MIN_SPREAD_BPS = 0.5
+PASSIVE_STABILITY_DELAY_SECONDS = 1.0
+PASSIVE_MAX_REPRICES = 6
+PASSIVE_CANCEL_COOLDOWN_SECONDS = 0.5
+
+
+def _refresh_asset_meta_for_assets(context, assets: Optional[Iterable[str]] = None) -> Dict[str, AssetMeta]:
+    """Refresh asset metadata and optionally return a subset."""
+    meta_payload, asset_ctxs = _fetch_meta_and_asset_ctxs(context.info)
+    refreshed = _build_asset_meta(context.info, meta_payload, asset_ctxs)
+    context.asset_meta.update(refreshed)
+    if assets is None:
+        return context.asset_meta
+    return {asset: context.asset_meta.get(asset) for asset in assets}
+
+
+def _best_price(meta: AssetMeta, is_buy: bool) -> Optional[float]:
+    return meta.impact_bid if is_buy else meta.impact_ask
+
+
+def _spread_bps_from_meta(meta: AssetMeta) -> Optional[float]:
+    bid = meta.impact_bid
+    ask = meta.impact_ask
+    if not bid or not ask or bid <= 0 or ask <= bid:
+        return None
+    mid = meta.mid_px or (bid + ask) / 2.0
+    if not mid or mid <= 0:
+        return None
+    return ((ask - bid) / mid) * 1e4
+
+
+def _should_reprice_passive(
+    meta: Optional[AssetMeta],
+    current_price: Optional[float],
+    is_buy: bool,
+    last_reprice_ts: float,
+    require_rest: bool = True,
+) -> bool:
+    if meta is None or current_price is None or current_price <= 0:
+        return False
+    now = time.time()
+    if require_rest and (now - last_reprice_ts) < PASSIVE_MIN_REST_BEFORE_REPRICE:
+        return False
+    best_px = _best_price(meta, is_buy)
+    if not best_px or best_px <= 0:
+        return False
+    tick = max(_price_tick(meta), 1e-8)
+    guard = max(tick * PASSIVE_REPRICE_TICK_THRESHOLD, current_price * 1e-4 * 0.5)
+    if is_buy:
+        if best_px <= current_price + guard:
+            return False
+    else:
+        if best_px >= current_price - guard:
+            return False
+    spread = _spread_bps_from_meta(meta)
+    if spread is not None and spread < PASSIVE_REPRICE_MIN_SPREAD_BPS:
+        return False
+    return True
 
 
 def _aggregate_slippage_metrics(orders: List[Dict[str, Any]]) -> Dict[str, Any]:
@@ -810,18 +875,152 @@ def execute_rebalance_with_stages(
         }
 
     timeout = config.execution.get("passive_timeout_seconds", 3600)
-    filled, unfilled = monitor_fills_with_timeout(
-        stage1_orders,
-        timeout,
-        config,
-        context.info,
+    deadline = stage1_start + timeout
+    monitor_window = int(
+        config.execution.get("passive_monitor_slice_seconds", PASSIVE_MONITOR_SLICE_SECONDS)
     )
+    monitor_window = max(5, monitor_window)
+
+    all_stage1_orders: List[Dict[str, Any]] = list(stage1_orders)
+    filled: List[Dict[str, Any]] = []
+    outstanding_orders: List[Dict[str, Any]] = list(stage1_orders)
+    filled_usd_by_asset: Dict[str, float] = defaultdict(float)
+    target_usd_by_asset: Dict[str, float] = {asset: abs(size) for asset, size in deltas.items()}
+    side_by_asset: Dict[str, bool] = {asset: (size > 0) for asset, size in deltas.items()}
+    last_reprice_ts: Dict[str, float] = defaultdict(lambda: stage1_start)
+    reprice_counts: Dict[str, int] = defaultdict(int)
+
+    while outstanding_orders and time.time() < deadline:
+        remaining_time = deadline - time.time()
+        if remaining_time <= 0:
+            break
+        window = int(min(max(5, monitor_window), max(5, remaining_time)))
+
+        window_filled, window_outstanding = monitor_fills_with_timeout(
+            outstanding_orders,
+            window,
+            config,
+            context.info,
+        )
+
+        for order in window_filled:
+            filled.append(order)
+            fill_usd = order.get("fill_usd")
+            if fill_usd is None:
+                fill_usd = order.get("size_usd", 0.0)
+            filled_usd_by_asset[order.get("asset")] += abs(fill_usd or 0.0)
+
+        if not window_outstanding:
+            outstanding_orders = []
+            break
+
+        outstanding_by_asset: Dict[str, List[Dict[str, Any]]] = defaultdict(list)
+        for order in window_outstanding:
+            outstanding_by_asset[order.get("asset")].append(order)
+
+        assets_to_consider = [asset for asset, orders in outstanding_by_asset.items() if orders]
+        if assets_to_consider:
+            _refresh_asset_meta_for_assets(context, assets_to_consider)
+
+        candidate_assets: List[str] = []
+        for asset, orders in outstanding_by_asset.items():
+            if not orders:
+                continue
+            if reprice_counts[asset] >= PASSIVE_MAX_REPRICES:
+                continue
+            meta = context.asset_meta.get(asset)
+            current_price = orders[0].get("limit_px")
+            is_buy = side_by_asset.get(asset, True)
+            total_target = target_usd_by_asset.get(asset, 0.0)
+            remaining_target = max(total_target - filled_usd_by_asset.get(asset, 0.0), 0.0)
+            min_order_usd = config.execution.get("min_order_size_usd", 2.0)
+            if remaining_target < max(min_order_usd * 0.9, 1.0):
+                continue
+            if _should_reprice_passive(meta, current_price, is_buy, last_reprice_ts[asset], require_rest=True):
+                candidate_assets.append(asset)
+
+        confirmed_assets: List[str] = []
+        if candidate_assets:
+            stability_sleep = min(PASSIVE_STABILITY_DELAY_SECONDS, max(0.0, deadline - time.time()))
+            if stability_sleep > 0:
+                time.sleep(stability_sleep)
+            _refresh_asset_meta_for_assets(context, candidate_assets)
+            for asset in candidate_assets:
+                orders = outstanding_by_asset.get(asset)
+                if not orders:
+                    continue
+                meta = context.asset_meta.get(asset)
+                current_price = orders[0].get("limit_px")
+                is_buy = side_by_asset.get(asset, True)
+                if _should_reprice_passive(meta, current_price, is_buy, last_reprice_ts[asset], require_rest=False):
+                    confirmed_assets.append(asset)
+
+        assets_to_reprice: List[str] = []
+        if confirmed_assets:
+            min_order_usd = config.execution.get("min_order_size_usd", 2.0)
+            for asset in confirmed_assets:
+                total_target = target_usd_by_asset.get(asset, 0.0)
+                remaining_target = max(total_target - filled_usd_by_asset.get(asset, 0.0), 0.0)
+                if remaining_target < max(min_order_usd * 0.9, 1.0):
+                    continue
+                assets_to_reprice.append(asset)
+
+        if assets_to_reprice:
+            to_cancel = [
+                order for order in window_outstanding if order.get("asset") in assets_to_reprice
+            ]
+            cancel_errors = cancel_orders(to_cancel, config, context.exchange)
+            stage1_errors.extend(cancel_errors)
+            if PASSIVE_CANCEL_COOLDOWN_SECONDS > 0:
+                time.sleep(PASSIVE_CANCEL_COOLDOWN_SECONDS)
+
+            reprice_deltas: Dict[str, float] = {}
+            timestamp_now = time.time()
+            for asset in assets_to_reprice:
+                total_target = target_usd_by_asset.get(asset, 0.0)
+                remaining_target = max(total_target - filled_usd_by_asset.get(asset, 0.0), 0.0)
+                if remaining_target <= 0:
+                    continue
+                is_buy = side_by_asset.get(asset, True)
+                current_orders = outstanding_by_asset.get(asset, [])
+                current_price = current_orders[0].get("limit_px") if current_orders else None
+                meta = context.asset_meta.get(asset)
+                best_px = _best_price(meta, is_buy) if meta else None
+                side_label = "buy" if is_buy else "sell"
+                top_label = "bid" if is_buy else "ask"
+                if current_price and best_px:
+                    print(
+                        f"🔁 Repricing {asset} {side_label}: top {top_label} {best_px:.6f}, "
+                        f"previous quote {current_price:.6f}"
+                    )
+                reprice_deltas[asset] = remaining_target if is_buy else -remaining_target
+                last_reprice_ts[asset] = timestamp_now
+                reprice_counts[asset] += 1
+
+            new_orders, new_errors = place_limit_orders(
+                reprice_deltas,
+                config,
+                context.info,
+                context.asset_meta,
+                context.exchange,
+            )
+            stage1_errors.extend(new_errors)
+            all_stage1_orders.extend(new_orders)
+            outstanding_orders = [
+                order for order in window_outstanding if order.get("asset") not in assets_to_reprice
+            ] + new_orders
+            continue
+
+        outstanding_orders = list(window_outstanding)
 
     stage1_time = time.time() - stage1_start
     print(
-        f"Stage 1 complete: {len(filled)}/{len(stage1_orders)} filled in "
+        f"Stage 1 complete: {len(filled)}/{len(all_stage1_orders)} filled in "
         f"{stage1_time:.1f}s"
     )
+
+    stage1_orders = all_stage1_orders
+    unfilled = outstanding_orders
 
     stage2_orders: List[Dict[str, Any]] = []
     stage2_errors: List[Dict[str, Any]] = []
