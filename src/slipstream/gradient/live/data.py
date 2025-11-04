@@ -2,6 +2,7 @@
 
 import asyncio
 import random
+import time
 from datetime import datetime, timedelta
 from typing import Any, Dict, List, Optional
 
@@ -18,8 +19,10 @@ from slipstream.gradient.sensitivity import (
 from slipstream.gradient.live import cache as cache_module
 
 # Tunable request controls to play nicely with Hyperliquid's rate limits.
-# Prior runs with 5 concurrent requests still triggered sustained 429s, so default to 2.
+# Prior runs with higher concurrency still triggered 429s, so default to 2 and add
+# a minimum inter-request delay for the initial historical sweep.
 MAX_CONCURRENT_REQUESTS = 2
+MIN_CANDLE_REQUEST_INTERVAL_SECONDS = 0.25  # 4 requests/second aggregate
 MAX_REQUEST_ATTEMPTS = 6
 INITIAL_BACKOFF_SECONDS = 2.0  # Increased from 1.0 to be more conservative
 BACKOFF_FACTOR = 2.0
@@ -280,9 +283,21 @@ def fetch_live_data(config) -> Dict[str, Any]:
 
     async def fetch_all_candles():
         semaphore = asyncio.Semaphore(MAX_CONCURRENT_REQUESTS)
+        rate_lock = asyncio.Lock()
+        last_request_ts = 0.0
+
         async with httpx.AsyncClient(timeout=30.0) as client:
             async def fetch_with_limit(asset: str):
+                nonlocal last_request_ts
                 async with semaphore:
+                    async with rate_lock:
+                        now = time.monotonic()
+                        wait = last_request_ts + MIN_CANDLE_REQUEST_INTERVAL_SECONDS - now
+                        if wait > 0:
+                            await asyncio.sleep(wait)
+                            now = time.monotonic()
+                        last_request_ts = now
+
                     return await fetch_candles_with_cache(
                         asset,
                         endpoint,
