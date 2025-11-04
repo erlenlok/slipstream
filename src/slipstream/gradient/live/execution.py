@@ -883,6 +883,7 @@ def execute_rebalance_with_stages(
     print(f"Sample deltas (USD): {sample}")
 
     context = _prepare_hyperliquid_context(config)
+    min_order_usd = config.execution.get("min_order_size_usd", 2.0)
     stage1_start = time.time()
 
     stage1_orders, stage1_errors = place_limit_orders(
@@ -1044,8 +1045,21 @@ def execute_rebalance_with_stages(
         outstanding_orders = list(window_outstanding)
 
     stage1_time = time.time() - stage1_start
+    target_asset_count = len(target_usd_by_asset)
+    total_target_usd = sum(target_usd_by_asset.values())
+    epsilon = max(1e-6, min_order_usd * 0.02)
+
+    stage1_asset_fills = 0
+    stage1_filled_notional = 0.0
+    for asset, target_usd in target_usd_by_asset.items():
+        filled_usd = filled_usd_by_asset.get(asset, 0.0)
+        clipped_filled = min(filled_usd, target_usd)
+        stage1_filled_notional += clipped_filled
+        if target_usd > 0 and clipped_filled + epsilon >= target_usd:
+            stage1_asset_fills += 1
+
     print(
-        f"Stage 1 complete: {len(filled)}/{len(all_stage1_orders)} filled in "
+        f"Stage 1 complete: {stage1_asset_fills}/{target_asset_count} assets filled in "
         f"{stage1_time:.1f}s"
     )
 
@@ -1086,14 +1100,19 @@ def execute_rebalance_with_stages(
 
     stage1_turnover = sum(abs(o.get("fill_usd", 0.0)) for o in filled)
     stage2_turnover = sum(abs(o.get("fill_usd", 0.0)) for o in stage2_orders)
+    stage2_asset_fills = len({order.get("asset") for order in stage2_orders if order.get("asset")})
 
     passive_stats = _aggregate_slippage_metrics(filled)
     aggressive_stats = _aggregate_slippage_metrics(stage2_orders)
     total_stats = _combine_slippage_stats(passive_stats, aggressive_stats)
 
-    total_orders = len(stage1_orders)
-    passive_fill_rate = len(filled) / total_orders if total_orders > 0 else 0.0
-    aggressive_fill_rate = len(stage2_orders) / total_orders if total_orders > 0 else 0.0
+    target_order_count = target_asset_count
+    passive_fill_rate = (
+        stage1_filled_notional / total_target_usd if total_target_usd > 0 else 0.0
+    )
+    aggressive_fill_rate = (
+        stage2_turnover / total_target_usd if total_target_usd > 0 else 0.0
+    )
 
     stage2_highlights = sorted(
         [
@@ -1122,6 +1141,12 @@ def execute_rebalance_with_stages(
         "passive_fill_rate": passive_fill_rate,
         "aggressive_fill_rate": aggressive_fill_rate,
         "stage2_highlights": stage2_highlights,
+        "target_order_count": target_order_count,
+        "total_target_usd": total_target_usd,
+        "stage1_fill_notional": stage1_filled_notional,
+        "stage2_fill_notional": stage2_turnover,
+        "stage1_asset_fills": stage1_asset_fills,
+        "stage2_asset_fills": stage2_asset_fills,
     }
 
 
@@ -1555,21 +1580,31 @@ def validate_execution_results(results: Dict[str, Any], config) -> None:
     """
     stage1_filled = results["stage1_filled"]
     stage2_filled = results["stage2_filled"]
-    total_orders = len(results["stage1_orders"])
+    stage1_asset_fills = results.get("stage1_asset_fills", stage1_filled)
+    stage2_asset_fills = results.get("stage2_asset_fills", stage2_filled)
+    total_orders = results.get("target_order_count", len(results["stage1_orders"]))
     errors = results.get("errors", [])
 
     if total_orders == 0:
         print("No orders placed (portfolio unchanged)")
         return
 
-    fill_rate = (
-        (stage1_filled + stage2_filled) / total_orders if total_orders > 0 else 0
-    )
+    total_target_usd = results.get("total_target_usd")
+    stage1_fill_notional = results.get("stage1_fill_notional", 0.0) or 0.0
+    stage2_fill_notional = results.get("stage2_fill_notional", 0.0) or 0.0
+    if total_target_usd:
+        fill_rate = (stage1_fill_notional + stage2_fill_notional) / total_target_usd
+    else:
+        fill_rate = (
+            (stage1_asset_fills + stage2_asset_fills) / total_orders
+            if total_orders > 0
+            else 0
+        )
 
     if fill_rate < 0.95:
         print(
             f"Warning: Low fill rate {fill_rate:.1%} "
-            f"({stage1_filled + stage2_filled}/{total_orders})"
+            f"({stage1_asset_fills + stage2_asset_fills}/{total_orders})"
         )
 
     if len(errors) > 0:
@@ -1583,7 +1618,13 @@ def validate_execution_results(results: Dict[str, Any], config) -> None:
     )
 
     print("Execution summary:")
-    print(f"  Stage 1 (limit): {stage1_filled} filled")
-    print(f"  Stage 2 (market): {stage2_filled} filled")
+    print(
+        f"  Stage 1 (limit): {stage1_asset_fills}/{total_orders} assets "
+        f"({stage1_fill_notional:,.2f}/{(total_target_usd or 0):,.2f} USD)"
+    )
+    print(
+        f"  Stage 2 (market): {stage2_asset_fills}/{total_orders} assets "
+        f"({stage2_fill_notional:,.2f} USD)"
+    )
     print(f"  Total turnover: ${total_turnover:,.2f} ({turnover_pct:.1f}% of capital)")
     print(f"  Errors: {len(errors)}")

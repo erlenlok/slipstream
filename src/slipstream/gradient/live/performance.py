@@ -46,10 +46,18 @@ class PerformanceTracker:
             "net_exposure": sum(target_positions.values()),
             "stage1_filled": execution_results.get("stage1_filled", 0),
             "stage2_filled": execution_results.get("stage2_filled", 0),
-            "total_orders": len(execution_results.get("stage1_orders", [])),
+            "total_orders": execution_results.get(
+                "target_order_count",
+                len(execution_results.get("stage1_orders", [])),
+            ),
             "total_turnover": execution_results.get("total_turnover", 0),
             "errors": len(execution_results.get("errors", [])),
             "dry_run": config.dry_run,
+            "stage1_asset_fills": execution_results.get("stage1_asset_fills"),
+            "stage2_asset_fills": execution_results.get("stage2_asset_fills"),
+            "stage1_fill_notional": execution_results.get("stage1_fill_notional"),
+            "stage2_fill_notional": execution_results.get("stage2_fill_notional"),
+            "total_target_usd": execution_results.get("total_target_usd"),
         }
 
         passive_stats = execution_results.get("passive_slippage", {}) or {}
@@ -233,14 +241,24 @@ class PerformanceTracker:
         total_stage1_fills = sum(r["stage1_filled"] for r in rebalances)
         total_stage2_fills = sum(r["stage2_filled"] for r in rebalances)
         total_orders = sum(r["total_orders"] for r in rebalances)
+        total_target_usd = sum((r.get("total_target_usd") or 0.0) for r in rebalances)
+        total_stage1_notional = sum((r.get("stage1_fill_notional") or 0.0) for r in rebalances)
+        total_stage2_notional = sum((r.get("stage2_fill_notional") or 0.0) for r in rebalances)
+        total_target_usd = sum((r.get("total_target_usd") or 0.0) for r in rebalances)
+        total_stage1_notional = sum((r.get("stage1_fill_notional") or 0.0) for r in rebalances)
+        total_stage2_notional = sum((r.get("stage2_fill_notional") or 0.0) for r in rebalances)
 
         avg_positions = sum(r["n_positions"] for r in rebalances) / len(rebalances)
         avg_gross_exposure = sum(r["gross_exposure"] for r in rebalances) / len(rebalances)
         avg_net_exposure = sum(r["net_exposure"] for r in rebalances) / len(rebalances)
 
         # Calculate fill rates
-        passive_fill_rate = total_stage1_fills / total_orders if total_orders > 0 else 0
-        aggressive_fill_rate = total_stage2_fills / total_orders if total_orders > 0 else 0
+        if total_target_usd > 0:
+            passive_fill_rate = total_stage1_notional / total_target_usd
+            aggressive_fill_rate = total_stage2_notional / total_target_usd
+        else:
+            passive_fill_rate = total_stage1_fills / total_orders if total_orders > 0 else 0
+            aggressive_fill_rate = total_stage2_fills / total_orders if total_orders > 0 else 0
 
         # Aggregate slippage
         passive_slip_usd = 0.0
@@ -291,6 +309,9 @@ class PerformanceTracker:
             "aggressive_fills": total_stage2_fills,
             "passive_fill_rate": passive_fill_rate,
             "aggressive_fill_rate": aggressive_fill_rate,
+            "total_target_usd": total_target_usd,
+            "stage1_fill_notional": total_stage1_notional,
+            "stage2_fill_notional": total_stage2_notional,
             "rebalances": rebalances,
             "passive_slippage_bps": passive_slip_bps,
             "aggressive_slippage_bps": aggressive_slip_bps,
@@ -357,6 +378,17 @@ class PerformanceTracker:
         if total_slip_usd > 0:
             total_slip_bps = (passive_weighted_sum + aggressive_weighted_sum) / total_slip_usd
 
+        passive_fill_rate = (
+            total_stage1_notional / total_target_usd
+            if total_target_usd > 0
+            else (total_stage1_fills / total_orders if total_orders > 0 else 0)
+        )
+        aggressive_fill_rate = (
+            total_stage2_notional / total_target_usd
+            if total_target_usd > 0
+            else (total_stage2_fills / total_orders if total_orders > 0 else 0)
+        )
+
         return {
             "first_rebalance": first_rebalance.isoformat(),
             "last_rebalance": last_rebalance.isoformat(),
@@ -368,8 +400,11 @@ class PerformanceTracker:
             "total_orders": total_orders,
             "passive_fills": total_stage1_fills,
             "aggressive_fills": total_stage2_fills,
-            "passive_fill_rate": total_stage1_fills / total_orders if total_orders > 0 else 0,
-            "aggressive_fill_rate": total_stage2_fills / total_orders if total_orders > 0 else 0,
+            "passive_fill_rate": passive_fill_rate,
+            "aggressive_fill_rate": aggressive_fill_rate,
+            "total_target_usd": total_target_usd,
+            "stage1_fill_notional": total_stage1_notional,
+            "stage2_fill_notional": total_stage2_notional,
             "passive_slippage_bps": passive_slip_bps,
             "aggressive_slippage_bps": aggressive_slip_bps,
             "total_slippage_bps": total_slip_bps,

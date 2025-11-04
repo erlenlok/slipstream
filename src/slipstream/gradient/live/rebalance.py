@@ -209,9 +209,19 @@ def run_rebalance():
 
         # Validate and log results
         validate_execution_results(execution_results, config)
+        target_order_count = execution_results.get("target_order_count", len(target_positions))
+        stage1_asset_fills = execution_results.get("stage1_asset_fills", execution_results["stage1_filled"])
+        stage2_asset_fills = execution_results.get("stage2_asset_fills", execution_results["stage2_filled"])
+
         logger.info("Rebalance complete!")
-        logger.info(f"Stage 1 fills: {execution_results['stage1_filled']}")
-        logger.info(f"Stage 2 fills: {execution_results['stage2_filled']}")
+        logger.info(
+            f"Stage 1 fills: {stage1_asset_fills}/{target_order_count} assets "
+            f"(${execution_results.get('stage1_fill_notional', 0.0):,.2f})"
+        )
+        logger.info(
+            f"Stage 2 fills: {stage2_asset_fills}/{target_order_count} assets "
+            f"(${execution_results.get('stage2_fill_notional', 0.0):,.2f})"
+        )
         logger.info(f"Total turnover: ${execution_results['total_turnover']:,.2f}")
 
         passive_fill_rate = execution_results.get("passive_fill_rate")
@@ -274,7 +284,7 @@ def run_rebalance():
                 "stage2_filled": execution_results['stage2_filled'],
                 "errors": len(execution_results.get('errors', [])),
                 "dry_run": config.dry_run,
-                "total_orders": len(execution_results.get("stage1_orders", [])),
+                "total_orders": target_order_count,
                 "passive_fill_rate": execution_results.get("passive_fill_rate"),
                 "aggressive_fill_rate": execution_results.get("aggressive_fill_rate"),
                 "passive_slippage": execution_results.get("passive_slippage"),
@@ -282,6 +292,11 @@ def run_rebalance():
                 "total_slippage": execution_results.get("total_slippage"),
                 "stage2_highlights": execution_results.get("stage2_highlights", []),
                 "signal_tracking": signal_tracking_summary,
+                "stage1_asset_fills": stage1_asset_fills,
+                "stage2_asset_fills": stage2_asset_fills,
+                "stage1_fill_notional": execution_results.get("stage1_fill_notional"),
+                "stage2_fill_notional": execution_results.get("stage2_fill_notional"),
+                "total_target_usd": execution_results.get("total_target_usd"),
             }
             telegram_success = send_telegram_rebalance_alert_sync(rebalance_data, config)
             if telegram_success:

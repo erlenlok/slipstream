@@ -48,6 +48,10 @@ async def send_telegram_rebalance_alert(
         errors = rebalance_data.get("errors", 0)
         dry_run = rebalance_data.get("dry_run", True)
         total_orders = rebalance_data.get("total_orders", stage1_filled + stage2_filled)
+        stage1_asset_fills = rebalance_data.get("stage1_asset_fills", stage1_filled)
+        stage2_asset_fills = rebalance_data.get("stage2_asset_fills", stage2_filled)
+        stage1_fill_notional = rebalance_data.get("stage1_fill_notional", 0.0) or 0.0
+        stage2_fill_notional = rebalance_data.get("stage2_fill_notional", 0.0) or 0.0
         passive_rate = rebalance_data.get("passive_fill_rate")
         aggressive_rate = rebalance_data.get("aggressive_fill_rate")
         passive_slip = rebalance_data.get("passive_slippage") or {}
@@ -113,8 +117,8 @@ async def send_telegram_rebalance_alert(
 
 💰 **Execution**:
   • Turnover: ${turnover:,.2f}
-  • Stage 1 (passive): {format_rate(stage1_filled, passive_rate)}
-  • Stage 2 (aggressive): {format_rate(stage2_filled, aggressive_rate)}
+  • Stage 1 (passive): {format_rate(stage1_asset_fills, passive_rate)} (~${stage1_fill_notional:,.0f})
+  • Stage 2 (aggressive): {format_rate(stage2_asset_fills, aggressive_rate)} (~${stage2_fill_notional:,.0f})
   • Errors: {errors}
 
 📉 **Slippage (bps | $)**:
