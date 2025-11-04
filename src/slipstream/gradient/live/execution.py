@@ -207,6 +207,8 @@ PASSIVE_STABILITY_DELAY_SECONDS = 1.0
 PASSIVE_MAX_REPRICES = 6
 PASSIVE_CANCEL_COOLDOWN_SECONDS = 0.5
 PASSIVE_META_REFRESH_SECONDS = 15.0
+PASSIVE_STALE_TICK_MULTIPLIER = 3
+PASSIVE_STALE_BPS_THRESHOLD = 3.0  # Require quote to be within 3 bps unless max reprices exceeded
 
 
 def _refresh_asset_meta_for_assets(context, assets: Optional[Iterable[str]] = None) -> Dict[str, AssetMeta]:
@@ -286,6 +288,25 @@ def _should_reprice_passive(
     if spread is not None and spread < PASSIVE_REPRICE_MIN_SPREAD_BPS:
         return False
     return True
+
+
+def _quote_is_stale(
+    meta: Optional[AssetMeta],
+    current_price: Optional[float],
+    is_buy: bool,
+) -> bool:
+    if meta is None or current_price is None or current_price <= 0:
+        return False
+    best_px = _best_price(meta, is_buy)
+    if not best_px or best_px <= 0:
+        return False
+    tick = max(_price_tick(meta), 1e-8)
+    tick_threshold = tick * PASSIVE_STALE_TICK_MULTIPLIER
+    bps_threshold = current_price * PASSIVE_STALE_BPS_THRESHOLD * 1e-4
+    threshold = max(tick_threshold, bps_threshold)
+    if is_buy:
+        return best_px - current_price > threshold
+    return current_price - best_px > threshold
 
 
 def _aggregate_slippage_metrics(orders: List[Dict[str, Any]]) -> Dict[str, Any]:
@@ -957,8 +978,6 @@ def execute_rebalance_with_stages(
         for asset, orders in outstanding_by_asset.items():
             if not orders:
                 continue
-            if reprice_counts[asset] >= PASSIVE_MAX_REPRICES:
-                continue
             meta = context.asset_meta.get(asset)
             current_price = orders[0].get("limit_px")
             is_buy = side_by_asset.get(asset, True)
@@ -966,6 +985,10 @@ def execute_rebalance_with_stages(
             remaining_target = max(total_target - filled_usd_by_asset.get(asset, 0.0), 0.0)
             min_order_usd = config.execution.get("min_order_size_usd", 2.0)
             if remaining_target < max(min_order_usd * 0.9, 1.0):
+                continue
+            reached_limit = reprice_counts[asset] >= PASSIVE_MAX_REPRICES
+            stale_quote = _quote_is_stale(meta, current_price, is_buy)
+            if reached_limit and not stale_quote:
                 continue
             if _should_reprice_passive(meta, current_price, is_buy, last_reprice_ts[asset], require_rest=True):
                 candidate_assets.append(asset)
@@ -983,6 +1006,10 @@ def execute_rebalance_with_stages(
                 meta = context.asset_meta.get(asset)
                 current_price = orders[0].get("limit_px")
                 is_buy = side_by_asset.get(asset, True)
+                reached_limit = reprice_counts[asset] >= PASSIVE_MAX_REPRICES
+                stale_quote = _quote_is_stale(meta, current_price, is_buy)
+                if reached_limit and not stale_quote:
+                    continue
                 if _should_reprice_passive(meta, current_price, is_buy, last_reprice_ts[asset], require_rest=False):
                     confirmed_assets.append(asset)
 
