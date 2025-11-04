@@ -209,6 +209,7 @@ PASSIVE_CANCEL_COOLDOWN_SECONDS = 0.5
 PASSIVE_META_REFRESH_SECONDS = 15.0
 PASSIVE_STALE_TICK_MULTIPLIER = 3
 PASSIVE_STALE_BPS_THRESHOLD = 3.0  # Require quote to be within 3 bps unless max reprices exceeded
+PASSIVE_ESCALATE_AFTER_SECONDS = 600.0
 
 
 def _refresh_asset_meta_for_assets(context, assets: Optional[Iterable[str]] = None) -> Dict[str, AssetMeta]:
@@ -942,6 +943,11 @@ def execute_rebalance_with_stages(
     last_reprice_ts: Dict[str, float] = defaultdict(lambda: stage1_start)
     reprice_counts: Dict[str, int] = defaultdict(int)
 
+    outstanding_first_seen: Dict[str, float] = {}
+    escalate_seconds = float(
+        config.execution.get("passive_escalate_seconds", PASSIVE_ESCALATE_AFTER_SECONDS)
+    )
+
     while outstanding_orders and time.time() < deadline:
         remaining_time = deadline - time.time()
         if remaining_time <= 0:
@@ -969,6 +975,29 @@ def execute_rebalance_with_stages(
         outstanding_by_asset: Dict[str, List[Dict[str, Any]]] = defaultdict(list)
         for order in window_outstanding:
             outstanding_by_asset[order.get("asset")].append(order)
+
+        now = time.time()
+        current_assets = {asset for asset, orders in outstanding_by_asset.items() if orders}
+        for asset in list(outstanding_first_seen.keys()):
+            if asset not in current_assets:
+                outstanding_first_seen.pop(asset, None)
+        for asset in current_assets:
+            outstanding_first_seen.setdefault(asset, now)
+
+        escalate_assets = [
+            asset
+            for asset in current_assets
+            if now - outstanding_first_seen.get(asset, now) >= escalate_seconds
+        ]
+        if escalate_assets:
+            asset_list = ", ".join(sorted(set(escalate_assets)))
+            print(
+                f"⚠️  Escalating passive attempt for {asset_list} after "
+                f"{int(now - min(outstanding_first_seen.get(asset, now) for asset in escalate_assets))}s "
+                "without fill."
+            )
+            outstanding_orders = list(window_outstanding)
+            break
 
         assets_to_consider = [asset for asset, orders in outstanding_by_asset.items() if orders]
         if assets_to_consider:
