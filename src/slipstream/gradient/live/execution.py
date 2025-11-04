@@ -162,6 +162,24 @@ def _ensure_passive_price(price: float, meta: AssetMeta, is_buy: bool) -> float:
     return _round_price(max(price, tick_size), meta.sz_decimals)
 
 
+def _resolve_main_wallet(config) -> str:
+    """
+    Resolve the main wallet address where balances and resting orders live.
+
+    Prefers environment variable override, falls back to config.api.main_wallet.
+    """
+    main_wallet = os.getenv("HYPERLIQUID_MAIN_WALLET")
+    if not main_wallet:
+        api_cfg = getattr(config, "api", {}) or {}
+        main_wallet = api_cfg.get("main_wallet")
+    if not main_wallet:
+        raise ValueError(
+            "HYPERLIQUID_MAIN_WALLET environment variable (or api.main_wallet in config) must be set "
+            "to fetch positions and open orders; this should point at the MAIN wallet, not the API vault."
+        )
+    return main_wallet
+
+
 def _calculate_slippage_bps(
     execution_px: Optional[float],
     mid_px: Optional[float],
@@ -693,14 +711,7 @@ def get_current_positions(config) -> Dict[str, float]:
     # Get main wallet address (where positions live)
     # On Hyperliquid: API key is a vault that trades FOR the main wallet
     # Positions live on the main wallet, not the API key vault
-    main_wallet = os.getenv("HYPERLIQUID_MAIN_WALLET")
-    if not main_wallet:
-        # Fallback: try API_KEY for backwards compatibility
-        main_wallet = os.getenv("HYPERLIQUID_API_KEY") or config.api_key
-        if not main_wallet:
-            raise ValueError(
-                "HYPERLIQUID_MAIN_WALLET or HYPERLIQUID_API_KEY environment variable not set"
-            )
+    main_wallet = _resolve_main_wallet(config)
 
     user_states = _collect_user_states(base_url, main_wallet)
     positions: Dict[str, float] = {}
@@ -1098,9 +1109,21 @@ def monitor_fills_with_timeout(
             )
         return filled, []
 
-    api_key = os.getenv("HYPERLIQUID_API_KEY") or config.api_key
-    if not api_key:
-        raise ValueError("HYPERLIQUID_API_KEY environment variable not set")
+    polling_addresses: List[str] = []
+    try:
+        polling_addresses.append(_resolve_main_wallet(config))
+    except ValueError:
+        pass
+
+    api_vault = os.getenv("HYPERLIQUID_API_KEY") or config.api_key
+    if api_vault:
+        polling_addresses.append(api_vault)
+
+    if not polling_addresses:
+        raise ValueError(
+            "Unable to determine address for open order monitoring. "
+            "Set HYPERLIQUID_MAIN_WALLET and HYPERLIQUID_API_KEY."
+        )
 
     start_time = time.time()
     outstanding: Dict[str, Dict[str, Any]] = {
@@ -1122,7 +1145,9 @@ def monitor_fills_with_timeout(
     while outstanding and (time.time() - start_time) < timeout_seconds:
         time.sleep(poll_interval)
         polls += 1
-        open_order_ids = set(_collect_open_order_ids(info_client, api_key))
+        open_order_ids: set[str] = set()
+        for address in polling_addresses:
+            open_order_ids.update(_collect_open_order_ids(info_client, address))
 
         newly_filled = 0
         for order_id in list(outstanding.keys()):
