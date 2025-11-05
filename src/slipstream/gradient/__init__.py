@@ -1,19 +1,15 @@
-"""
-Gradient strategy components.
+"""Compatibility wrapper for the legacy ``slipstream.gradient`` namespace."""
 
-The Gradient strategy targets a balanced long/short portfolio using
-multi-horizon trend strength signals derived from volatility-normalized
-returns.
-"""
+from __future__ import annotations
 
-from .signals import DEFAULT_LOOKBACKS, compute_trend_strength  # noqa: F401
-from .portfolio import construct_gradient_portfolio  # noqa: F401
-from .backtest import run_gradient_backtest  # noqa: F401
+from ._compat import alias_module as _alias_module
 
-__all__ = [
-    "DEFAULT_LOOKBACKS",
-    "compute_trend_strength",
-    "construct_gradient_portfolio",
-    "run_gradient_backtest",
-]
-
+_alias_module(
+    __name__,
+    "slipstream.strategies.gradient",
+    stacklevel=2,
+    message=(
+        "The 'slipstream.gradient' package is deprecated and will be removed in a future release. "
+        "Import 'slipstream.strategies.gradient' instead."
+    ),
+)

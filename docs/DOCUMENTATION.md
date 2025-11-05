@@ -1,7 +1,7 @@
 # Slipstream Documentation
 
 > **Note:** A lightweight companion strategy named *Gradient* now lives under
-> `src/slipstream/gradient`. See `docs/GRADIENT.md` for its workflow, CLI
+> `src/slipstream/strategies/gradient`. See `docs/strategies/gradient/README.md` for its workflow, CLI
 > commands, and implementation details.
 
 # Slipstream: Strategy Specification

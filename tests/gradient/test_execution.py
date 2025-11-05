@@ -1,6 +1,6 @@
 import pytest
 
-from slipstream.gradient.live.execution import (
+from slipstream.strategies.gradient.live.execution import (
     AssetMeta,
     _compute_limit_price,
     _price_tick,
@@ -8,7 +8,7 @@ from slipstream.gradient.live.execution import (
     _aggregate_slippage_metrics,
     _extract_order_id,
 )
-from slipstream.gradient.live.performance import compute_signal_tracking_metrics
+from slipstream.strategies.gradient.live.performance import compute_signal_tracking_metrics
 
 
 @pytest.mark.parametrize(

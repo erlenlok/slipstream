@@ -46,8 +46,8 @@ REDIS_ENABLED=true
 ### File Locations
 
 **Code**:
-- Main script: `/root/slipstream/src/slipstream/gradient/live/rebalance.py`
-- Execution logic: `/root/slipstream/src/slipstream/gradient/live/execution.py` ✨ FIXED
+- Main script: `/root/slipstream/src/slipstream/strategies/gradient/live/rebalance.py`
+- Execution logic: `/root/slipstream/src/slipstream/strategies/gradient/live/execution.py` ✨ FIXED
 - Configuration: `/root/slipstream/config/gradient_live.json`
 
 **Logs**:
@@ -65,7 +65,7 @@ REDIS_ENABLED=true
 ```bash
 # Run manual rebalance (will execute immediately)
 export HYPERLIQUID_MAIN_WALLET="0xFd5cf66Cf037140A477419B89656E5F735fa82f4"
-uv run python -m slipstream.gradient.live.rebalance
+uv run python -m slipstream.strategies.gradient.live.rebalance
 
 # Check logs
 tail -f /var/log/gradient/rebalance_$(date +%Y%m%d).log
@@ -151,7 +151,7 @@ nano config/gradient_live.json  # Change "dry_run": true
 crontab -e  # Comment out the gradient line
 
 # Method 3: Flatten all positions
-python scripts/live/gradient_emergency_stop.py --flatten-all
+python scripts/strategies/gradient/live/emergency_stop.py --flatten-all
 ```
 
 **Check account status**:
@@ -159,8 +159,8 @@ python scripts/live/gradient_emergency_stop.py --flatten-all
 # View current positions
 export HYPERLIQUID_MAIN_WALLET="0xFd5cf66Cf037140A477419B89656E5F735fa82f4"
 uv run python -c "
-from slipstream.gradient.live.config import load_config
-from slipstream.gradient.live.execution import get_current_positions
+from slipstream.strategies.gradient.live.config import load_config
+from slipstream.strategies.gradient.live.execution import get_current_positions
 config = load_config()
 positions = get_current_positions(config)
 for asset, value in positions.items():

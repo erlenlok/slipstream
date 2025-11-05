@@ -40,17 +40,23 @@ This is fundamentally a **funding carry strategy** where momentum adds value pri
 
 ```
 slipstream/
-├── src/slipstream/              # Importable Python package
-│   ├── common/                  # Shared utilities (returns, volatility)
-│   ├── signals/                 # Signal generation (EWMA momentum, PCA)
-│   ├── alpha/                   # Price alpha model training
-│   ├── funding/                 # Funding rate prediction
-│   ├── portfolio/               # Portfolio optimization & backtesting ✨ NEW
-│   └── gradient/                # Gradient trend strategy modules ✨ NEW
-│       ├── optimizer.py         # Beta-neutral optimizer
-│       ├── costs.py             # Transaction cost model
-│       ├── backtest.py          # Walk-forward simulation
-│       └── risk.py              # Covariance estimation & risk analytics
+├── src/slipstream/                  # Importable Python package
+│   ├── core/                        # Shared services for every strategy
+│   │   ├── common/                  # Return & volatility utilities
+│   │   ├── config/                  # Layered config loader and helpers ✨ NEW
+│   │   ├── signals/                 # Signal generators (EWMA, PCA, filters)
+│   │   ├── portfolio/               # Optimisers, backtesting engines
+│   │   ├── costs/                   # Transaction cost models
+│   │   └── funding/                 # Funding data prep helpers
+│   ├── strategies/                  # Strategy-specific implementations
+│   │   ├── gradient/                # Gradient live + backtest stack ✨ NEW LOCATION
+│   │   └── template/                # Scaffold for new strategies
+│   ├── common/                      # Legacy shim → slipstream.core.common
+│   ├── signals/                     # Legacy shim → slipstream.core.signals
+│   ├── portfolio/                   # Legacy shim → slipstream.core.portfolio
+│   ├── costs/                       # Legacy shim → slipstream.core.costs
+│   ├── funding/                     # Legacy shim → slipstream.core.funding
+│   └── alpha/                       # Price alpha research modules
 ├── scripts/
 │   ├── data_load.py             # API data fetcher
 │   ├── fetch_s3_historical.py   # S3 historical downloader
@@ -78,7 +84,7 @@ slipstream/
 
 ## 🌈 Gradient Strategy
 
-Looking for a simpler trend overlay without the full alpha + funding stack? The new [Gradient strategy](docs/GRADIENT.md) keeps equal dollar-volatility long and short books in the assets with the strongest directional trends. Generate signals with `uv run gradient-signals` and backtest with `uv run gradient-backtest`.
+Looking for a simpler trend overlay without the full alpha + funding stack? The new [Gradient strategy](docs/strategies/gradient/README.md) keeps equal dollar-volatility long and short books in the assets with the strongest directional trends. Generate signals with `uv run gradient-signals` and backtest with `uv run gradient-backtest`.
 
 ## 🏁 Quick Start
 

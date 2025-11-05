@@ -2,72 +2,15 @@
 
 ## 🚀 Immediate Next Steps (3-4 hours to go live)
 
-### 1. Complete Implementation (2-3 hours)
+### 1. Core Components
 
-The following files need to be implemented:
+All live-trading modules are implemented and wired together:
 
-#### `data.py` - Data Fetching & Signal Generation
-```python
-# TODO: Implement
-def fetch_live_data(config):
-    """Fetch latest 4h candles for all perps from Hyperliquid API"""
-    pass
-
-def compute_live_signals(candles, config):
-    """Compute momentum scores for all assets"""
-    # Reuse logic from sensitivity.py:
-    # - compute_vol_normalized_returns()
-    # - compute_multispan_momentum()
-    pass
-```
-
-#### `portfolio.py` - Portfolio Construction
-```python
-# TODO: Implement
-def construct_target_portfolio(signals, config):
-    """
-    Given momentum signals, construct target portfolio:
-    1. Rank assets by momentum score
-    2. Select top/bottom 35%
-    3. Apply liquidity filter
-    4. Calculate inverse-vol weights
-    5. Return target positions in USD
-    """
-    pass
-```
-
-#### `execution.py` - Order Execution
-```python
-# TODO: Implement
-def get_current_positions(config):
-    """Fetch current positions from Hyperliquid"""
-    pass
-
-def execute_rebalance(target_positions, current_positions, config):
-    """
-    Calculate deltas and place orders:
-    1. Delta = target - current
-    2. For each non-zero delta, place market order
-    3. Log all fills
-    4. Handle errors gracefully
-    """
-    pass
-```
-
-#### `rebalance.py` - Main Entry Point
-```python
-# TODO: Implement
-def run_rebalance():
-    """
-    Main rebalance workflow:
-    1. Load config
-    2. Fetch data & compute signals
-    3. Construct target portfolio
-    4. Execute rebalance
-    5. Log results
-    """
-    pass
-```
+- **`data.py`** fetches live 4-hour candles (with optional Redis caching) and computes momentum signals using the production liquidity filters and multi-span EWMA stack.
+- **`portfolio.py`** ranks the signal panel, applies inverse-volatility sizing, enforces risk limits, and validates the resulting target book.
+- **`execution.py`** manages rebalance execution with two-stage limit→market logic, complete with passive repricing, slippage aggregation, and Hyperliquid context helpers.
+- **`rebalance.py`** is the cron entry point orchestrating config loading, data fetching, signal generation, execution, performance logging, and notifications.
+- **`performance.py` / `notifications.py`** log telemetry (rebalance history, positions, signal tracking) and deliver Telegram/email alerts.
 
 ### 2. Set Up API Access (15 minutes)
 
@@ -97,7 +40,7 @@ Edit `config/gradient_live.json`:
 
 ```bash
 # Run a single rebalance cycle (dry-run mode)
-python -m slipstream.gradient.live.rebalance
+python -m slipstream.strategies.gradient.live.rebalance
 
 # Check logs
 tail -f /var/log/gradient/rebalance.log
@@ -130,7 +73,7 @@ Then set up cron job:
 crontab -e
 
 # Add this line (runs every 4 hours):
-0 */4 * * * cd /root/slipstream && /root/slipstream/.venv/bin/python -m slipstream.gradient.live.rebalance >> /var/log/gradient/rebalance.log 2>&1
+0 */4 * * * cd /root/slipstream && /root/slipstream/.venv/bin/python -m slipstream.strategies.gradient.live.rebalance >> /var/log/gradient/rebalance.log 2>&1
 ```
 
 ## 📋 Implementation Checklist
@@ -153,7 +96,7 @@ Much of the logic already exists in `sensitivity.py`:
 
 ```python
 # From sensitivity.py, reuse:
-from slipstream.gradient.sensitivity import (
+from slipstream.strategies.gradient.sensitivity import (
     compute_vol_normalized_returns,
     compute_multispan_momentum,
     filter_universe_by_liquidity,
@@ -204,7 +147,7 @@ order = {
 1. **Start Small**: Use $1k-$5k initially
 2. **Dry-Run First**: Test for 1-2 days before live
 3. **Monitor Closely**: Check logs after each rebalance for first week
-4. **Have Emergency Stop**: Keep `scripts/gradient_emergency_stop.sh` ready
+4. **Have Emergency Stop**: Keep `scripts/strategies/gradient/live/emergency_stop.py` ready
 5. **Check Fills**: Verify all orders fill at reasonable prices
 
 ## 📊 Expected Behavior
@@ -221,7 +164,7 @@ If something goes wrong:
 
 ```bash
 # Flatten all positions immediately
-python -m slipstream.gradient.live.emergency_stop --flatten-all
+python -m slipstream.strategies.gradient.live.emergency_stop --flatten-all
 
 # Or manually via API
 # (Keep a script ready for this)
@@ -230,7 +173,7 @@ python -m slipstream.gradient.live.emergency_stop --flatten-all
 ## 📞 Support
 
 Review docs:
-- `docs/GRADIENT_DEPLOYMENT.md` - Full deployment guide
-- `docs/GRADIENT.md` - Strategy overview and sensitivity analysis results
+- `docs/strategies/gradient/DEPLOYMENT.md` - Full deployment guide
+- `docs/strategies/gradient/README.md` - Strategy overview and sensitivity analysis results
 
 Good luck! 🚀

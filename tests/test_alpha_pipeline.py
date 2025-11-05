@@ -73,7 +73,7 @@ def test_momentum_is_clipped():
     loadings = pd.Series(1.0, index=pd.MultiIndex.from_product([index, ["A", "B"]]), name="loading")
     market_factor = pd.Series(0.0, index=index)
 
-    from slipstream.signals import idiosyncratic_momentum
+    from slipstream.core.signals import idiosyncratic_momentum
 
     momentum = idiosyncratic_momentum(
         returns=returns,

@@ -1,14 +1,19 @@
 #!/usr/bin/env python
-"""
-Compute Gradient trend strength signals from a returns panel.
-"""
+"""Compatibility wrapper for scripts/strategies/gradient/compute_signals.py."""
 
-from slipstream.gradient.cli import compute_signals_cli
+import warnings
+
+from scripts.strategies.gradient.compute_signals import main
 
 
-def main() -> None:
-    compute_signals_cli()
+def _run() -> None:
+    warnings.warn(
+        "Use scripts/strategies/gradient/compute_signals.py (or `uv run gradient-signals`).",
+        DeprecationWarning,
+        stacklevel=2,
+    )
+    main()
 
 
 if __name__ == "__main__":
-    main()
+    _run()

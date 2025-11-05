@@ -1,7 +1,7 @@
 import numpy as np
 import pandas as pd
 
-from slipstream.gradient.signals import compute_trend_strength
+from slipstream.strategies.gradient.signals import compute_trend_strength
 
 
 def test_compute_trend_strength_returns_components():

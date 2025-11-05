@@ -179,7 +179,7 @@ chmod 755 /var/log/gradient
 
 ```bash
 uv run python -c "
-from slipstream.gradient.live import load_config, validate_config
+from slipstream.strategies.gradient.live import load_config, validate_config
 config = load_config()
 validate_config(config)
 print('✓ Configuration valid')
@@ -197,7 +197,7 @@ print(f'  Alerts: {config.alerts_enabled}')
 
 ```bash
 uv run python -c "
-from slipstream.gradient.live import load_config, fetch_live_data
+from slipstream.strategies.gradient.live import load_config, fetch_live_data
 config = load_config()
 print('Fetching live market data...')
 data = fetch_live_data(config)
@@ -212,7 +212,7 @@ Expected: Should fetch 100+ assets, thousands of candles
 
 ```bash
 uv run python -c "
-from slipstream.gradient.live import load_config, fetch_live_data, compute_live_signals
+from slipstream.strategies.gradient.live import load_config, fetch_live_data, compute_live_signals
 config = load_config()
 data = fetch_live_data(config)
 print('Computing signals...')
@@ -232,7 +232,7 @@ Expected: Should show clear momentum ranking
 
 ```bash
 uv run python -c "
-from slipstream.gradient.live import load_config, fetch_live_data, compute_live_signals, construct_target_portfolio
+from slipstream.strategies.gradient.live import load_config, fetch_live_data, compute_live_signals, construct_target_portfolio
 config = load_config()
 data = fetch_live_data(config)
 signals = compute_live_signals(data, config)
@@ -264,7 +264,7 @@ Expected: Should show balanced long/short portfolio
 cat config/gradient_live.json | grep dry_run
 
 # Run full rebalance
-uv run python -m slipstream.gradient.live.rebalance
+uv run python -m slipstream.strategies.gradient.live.rebalance
 ```
 
 Expected output:
@@ -283,8 +283,8 @@ DRY-RUN MODE: No actual orders were placed
 
 ```bash
 uv run python -c "
-from slipstream.gradient.live.notifications import send_telegram_rebalance_alert_sync
-from slipstream.gradient.live.config import load_config
+from slipstream.strategies.gradient.live.notifications import send_telegram_rebalance_alert_sync
+from slipstream.strategies.gradient.live.config import load_config
 
 config = load_config()
 test_data = {
@@ -318,7 +318,7 @@ Verify EVERYTHING before going live:
 - [ ] Log directory exists and writable
 - [ ] Dry-run test completed successfully
 - [ ] Understand you're about to place REAL orders
-- [ ] Emergency stop script ready: `scripts/live/gradient_emergency_stop.py`
+- [ ] Emergency stop script ready: `scripts/strategies/gradient/live/emergency_stop.py`
 
 ### 4.2 LIVE First Rebalance
 
@@ -333,7 +333,7 @@ cat config/gradient_live.json | grep -A2 "dry_run\|capital_usd"
 # "dry_run": false,
 
 # Run live rebalance
-uv run python -m slipstream.gradient.live.rebalance
+uv run python -m slipstream.strategies.gradient.live.rebalance
 ```
 
 **Watch the output carefully:**
@@ -411,7 +411,7 @@ crontab -e
 Add this line (note the **1** not 0!):
 ```bash
 # Gradient 4h rebalancing - runs at :01 of each 4-hour boundary
-1 */4 * * * /root/slipstream/scripts/live/gradient_rebalance.sh >> /var/log/gradient/cron.log 2>&1
+1 */4 * * * /root/slipstream/scripts/strategies/gradient/live/rebalance.sh >> /var/log/gradient/cron.log 2>&1
 ```
 
 Save and exit (Ctrl+X, Y, Enter in nano)
@@ -423,7 +423,7 @@ Save and exit (Ctrl+X, Y, Enter in nano)
 crontab -l | grep gradient
 
 # Should show:
-# 1 */4 * * * /root/slipstream/scripts/live/gradient_rebalance.sh >> /var/log/gradient/cron.log 2>&1
+# 1 */4 * * * /root/slipstream/scripts/strategies/gradient/live/rebalance.sh >> /var/log/gradient/cron.log 2>&1
 
 # Check cron is running
 sudo systemctl status cron
@@ -472,7 +472,7 @@ Every day for first week:
 
 ```bash
 # Daily summary
-uv run python scripts/live/gradient_daily_summary.py
+uv run python scripts/strategies/gradient/live/daily_summary.py
 
 # View all rebalances
 cat /var/log/gradient/rebalance_history.jsonl | jq '.timestamp, .n_positions, .total_turnover'
@@ -486,10 +486,10 @@ cat /var/log/gradient/rebalance_history.jsonl | jq '.timestamp, .n_positions, .t
 
 ```bash
 # Option 1: Cancel orders only
-uv run python scripts/live/gradient_emergency_stop.py --cancel-orders
+uv run python scripts/strategies/gradient/live/emergency_stop.py --cancel-orders
 
 # Option 2: Flatten all positions (go to cash)
-uv run python scripts/live/gradient_emergency_stop.py --flatten-all
+uv run python scripts/strategies/gradient/live/emergency_stop.py --flatten-all
 
 # Option 3: Disable cron
 crontab -e
@@ -567,7 +567,7 @@ If all goes well for 1 week:
 
 ```bash
 # Manual rebalance
-uv run python -m slipstream.gradient.live.rebalance
+uv run python -m slipstream.strategies.gradient.live.rebalance
 
 # Check config
 cat config/gradient_live.json | grep -A2 "dry_run\|capital_usd"
@@ -579,10 +579,10 @@ tail -f /var/log/gradient/rebalance_$(date +%Y%m%d).log
 crontab -l | grep gradient
 
 # Emergency stop
-uv run python scripts/live/gradient_emergency_stop.py --flatten-all
+uv run python scripts/strategies/gradient/live/emergency_stop.py --flatten-all
 
 # Test telegram
-uv run python -c "from slipstream.gradient.live.notifications import send_telegram_rebalance_alert_sync; ..."
+uv run python -c "from slipstream.strategies.gradient.live.notifications import send_telegram_rebalance_alert_sync; ..."
 
 # Verify candle alignment
 uv run python scripts/verify_candle_alignment.py

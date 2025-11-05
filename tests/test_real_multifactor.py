@@ -6,7 +6,7 @@ import numpy as np
 
 sys.path.insert(0, str(Path(__file__).parent / 'src'))
 
-from slipstream.signals import compute_multifactor_residuals
+from slipstream.core.signals import compute_multifactor_residuals
 
 print("="*80)
 print("MULTI-FACTOR RESIDUALS TEST (Real Crypto Data)")

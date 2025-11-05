@@ -3,7 +3,7 @@ import pandas as pd
 import pytest
 
 from slipstream.common import ewm_volatility
-from slipstream.gradient.portfolio import construct_gradient_portfolio
+from slipstream.strategies.gradient.portfolio import construct_gradient_portfolio
 
 
 def test_construct_gradient_portfolio_balances_dollar_vol():

@@ -9,7 +9,7 @@ import pandas as pd
 import numpy as np
 from typing import Optional
 
-from slipstream.signals.base import validate_signal_dataframe
+from .base import validate_signal_dataframe
 
 
 def align_signals_to_universe(

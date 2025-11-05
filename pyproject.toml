@@ -31,8 +31,8 @@ notebook = [
 
 [project.scripts]
 hl-load = "slipstream.__main__:main"
-gradient-signals = "slipstream.gradient.cli:compute_signals_cli"
-gradient-backtest = "slipstream.gradient.cli:run_backtest_cli"
+gradient-signals = "slipstream.strategies.gradient.cli:compute_signals_cli"
+gradient-backtest = "slipstream.strategies.gradient.cli:run_backtest_cli"
 
 [build-system]
 requires = ["hatchling"]

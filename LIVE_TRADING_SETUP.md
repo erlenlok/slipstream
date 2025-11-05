@@ -7,14 +7,14 @@
 - ✅ Optimal parameters identified: **35% concentration, 4h rebalancing, inverse-vol weighting**
 - ✅ Expected Sharpe ratio: **~3.1 annualized**
 - ✅ Visualization plots generated
-- ✅ Results documented in `docs/GRADIENT.md` and `docs/GRADIENT_DEPLOYMENT.md`
+- ✅ Results documented in `docs/strategies/gradient/README.md` and `docs/strategies/gradient/DEPLOYMENT.md`
 
 ### 2. Infrastructure & Configuration
-- ✅ Live trading module structure created: `src/slipstream/gradient/live/`
+- ✅ Live trading module structure created: `src/slipstream/strategies/gradient/live/`
 - ✅ Configuration system implemented: `config/gradient_live.json`
-- ✅ Main rebalance orchestrator: `src/slipstream/gradient/live/rebalance.py`
-- ✅ Cron wrapper script: `scripts/live/gradient_rebalance.sh`
-- ✅ Emergency stop script: `scripts/live/gradient_emergency_stop.py`
+- ✅ Main rebalance orchestrator: `src/slipstream/strategies/gradient/live/rebalance.py`
+- ✅ Cron wrapper script: `scripts/strategies/gradient/live/rebalance.sh`
+- ✅ Emergency stop script: `scripts/strategies/gradient/live/emergency_stop.py`
 - ✅ Comprehensive logging setup
 - ✅ Deployment documentation complete
 
@@ -22,7 +22,7 @@
 
 ### Critical Path to Go-Live:
 
-#### 1. Data Fetching (`src/slipstream/gradient/live/data.py`) - **~1 hour**
+#### 1. Data Fetching (`src/slipstream/strategies/gradient/live/data.py`) - **~1 hour**
 Implement two functions:
 
 **`fetch_live_data(config)`:**
@@ -35,9 +35,9 @@ Implement two functions:
 - Compute log returns, ADV, volatility
 - Filter by liquidity threshold
 - Calculate multi-span EWMA momentum
-- Reference: Reuse from `src/slipstream/gradient/sensitivity.py`
+- Reference: Reuse from `src/slipstream/strategies/gradient/sensitivity.py`
 
-#### 2. Portfolio Construction (`src/slipstream/gradient/live/portfolio.py`) - **~1 hour**
+#### 2. Portfolio Construction (`src/slipstream/strategies/gradient/live/portfolio.py`) - **~1 hour**
 Implement one function:
 
 **`construct_target_portfolio(signals, config)`:**
@@ -48,7 +48,7 @@ Implement one function:
 - Apply position size limits
 - Reference: Logic exists in `sensitivity.py:run_concentration_backtest()`
 
-#### 3. Order Execution (`src/slipstream/gradient/live/execution.py`) - **~2 hours**
+#### 3. Order Execution (`src/slipstream/strategies/gradient/live/execution.py`) - **~2 hours**
 Implement two functions:
 
 **`get_current_positions(config)`:**
@@ -64,7 +64,7 @@ Implement two functions:
 - Log all executions
 - **Note: This is the most complex part** (API signing, order submission)
 
-#### 4. Emergency Stop (`scripts/live/gradient_emergency_stop.py`) - **~30 min**
+#### 4. Emergency Stop (`scripts/strategies/gradient/live/emergency_stop.py`) - **~30 min**
 Implement:
 
 **`flatten_all_positions(config)`:**
@@ -119,7 +119,7 @@ Strategy Configuration:
   config/gradient_live.json              - Main config file
 
 Live Trading Code:
-  src/slipstream/gradient/live/
+  src/slipstream/strategies/gradient/live/
     ├── config.py                       - ✅ Configuration (complete)
     ├── data.py                         - 🚧 Data fetching (TODO)
     ├── portfolio.py                    - 🚧 Portfolio construction (TODO)
@@ -128,13 +128,13 @@ Live Trading Code:
 
 Scripts:
   scripts/live/
-    ├── gradient_rebalance.sh           - ✅ Cron wrapper (complete)
+    ├── gradient/live/rebalance.sh      - ✅ Cron wrapper (complete)
     └── gradient_emergency_stop.py      - 🚧 Emergency stop (TODO)
 
 Documentation:
-  docs/GRADIENT.md                       - Strategy overview & analysis results
-  docs/GRADIENT_DEPLOYMENT.md            - Full deployment guide
-  src/slipstream/gradient/live/README.md - Quick start guide
+  docs/strategies/gradient/README.md          - Strategy overview & analysis results
+  docs/strategies/gradient/DEPLOYMENT.md      - Full deployment guide
+  src/slipstream/strategies/gradient/live/README.md - Quick start guide
 ```
 
 ### Key API Endpoints (Hyperliquid)
@@ -183,20 +183,20 @@ See Hyperliquid API docs for signing algorithm.
 crontab -e
 
 # Add this line (runs every 4 hours at 0:00, 4:00, 8:00, etc.)
-0 */4 * * * /root/slipstream/scripts/live/gradient_rebalance.sh >> /var/log/gradient/cron.log 2>&1
+0 */4 * * * /root/slipstream/scripts/strategies/gradient/live/rebalance.sh >> /var/log/gradient/cron.log 2>&1
 ```
 
 ### Testing Commands
 
 ```bash
 # Test configuration loading
-python -c "from slipstream.gradient.live import load_config; config = load_config(); print('Config loaded successfully')"
+python -c "from slipstream.strategies.gradient.live import load_config; config = load_config(); print('Config loaded successfully')"
 
 # Run dry-run rebalance
-python -m slipstream.gradient.live.rebalance
+python -m slipstream.strategies.gradient.live.rebalance
 
 # Test emergency stop (dry-run)
-python scripts/live/gradient_emergency_stop.py --flatten-all
+python scripts/strategies/gradient/live/emergency_stop.py --flatten-all
 
 # Check logs
 tail -f /var/log/gradient/rebalance_$(date +%Y%m%d).log
@@ -209,7 +209,7 @@ The data module is foundational. Get this working first before moving to portfol
 
 **Test independently:**
 ```python
-from slipstream.gradient.live import load_config, fetch_live_data, compute_live_signals
+from slipstream.strategies.gradient.live import load_config, fetch_live_data, compute_live_signals
 
 config = load_config()
 data = fetch_live_data(config)
@@ -223,7 +223,7 @@ print(signals.head(10))  # Should show top 10 by momentum
 Don't reinvent the wheel! Much of the logic already exists:
 
 - **Data fetching**: `scripts/data_load.py`
-- **Signal computation**: `src/slipstream/gradient/sensitivity.py`
+- **Signal computation**: `src/slipstream/strategies/gradient/sensitivity.py`
 - **Portfolio construction**: `sensitivity.py:run_concentration_backtest()`
 
 Copy and adapt these functions.
@@ -237,7 +237,7 @@ signals = pd.read_csv("data/gradient/sensitivity/panel_data.csv")
 signals = signals[signals["timestamp"] == signals["timestamp"].max()]
 
 # Test portfolio construction
-from slipstream.gradient.live import construct_target_portfolio, load_config
+from slipstream.strategies.gradient.live import construct_target_portfolio, load_config
 config = load_config()
 positions = construct_target_portfolio(signals, config)
 
@@ -276,8 +276,8 @@ In live trading, errors will happen. Ensure:
 ## 📞 Support Resources
 
 - **Hyperliquid API Docs**: https://docs.hyperliquid.xyz/
-- **Strategy Docs**: `docs/GRADIENT.md`, `docs/GRADIENT_DEPLOYMENT.md`
-- **Code Reference**: `src/slipstream/gradient/sensitivity.py` (backtest implementation)
+- **Strategy Docs**: `docs/strategies/gradient/README.md`, `docs/strategies/gradient/DEPLOYMENT.md`
+- **Code Reference**: `src/slipstream/strategies/gradient/sensitivity.py` (backtest implementation)
 
 ## ⚠️ Final Reminder
 

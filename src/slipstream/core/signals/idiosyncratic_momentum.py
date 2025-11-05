@@ -14,7 +14,7 @@ import pandas as pd
 import numpy as np
 from typing import Optional, Literal
 
-from slipstream.signals.base import validate_returns_dataframe
+from .base import validate_returns_dataframe
 
 BASE_INTERVAL_HOURS = 4
 

@@ -58,7 +58,7 @@ export HYPERLIQUID_MAIN_WALLET="0xFd5cf66Cf037140A477419B89656E5F735fa82f4"
 
 ## The Fix
 
-Updated `src/slipstream/gradient/live/execution.py`:
+Updated `src/slipstream/strategies/gradient/live/execution.py`:
 
 ### Before (Broken):
 ```python
@@ -110,7 +110,7 @@ HYPERLIQUID_API_KEY=0x998c0B58193faca878B55aE29165b68167A1BD30
 HYPERLIQUID_MAIN_WALLET=0xFd5cf66Cf037140A477419B89656E5F735fa82f4
 
 # Your rebalance job
-0 */4 * * * cd /root/slipstream && /root/.local/bin/uv run python -m slipstream.gradient.live.rebalance >> /root/slipstream/logs/rebalance.log 2>&1
+0 */4 * * * cd /root/slipstream && /root/.local/bin/uv run python -m slipstream.strategies.gradient.live.rebalance >> /root/slipstream/logs/rebalance.log 2>&1
 ```
 
 ## Summary

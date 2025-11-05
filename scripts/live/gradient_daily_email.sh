@@ -18,7 +18,7 @@ source .venv/bin/activate
 # export EMAIL_PASSWORD="your-app-password"
 
 # Run daily summary script
-python scripts/live/gradient_daily_summary.py
+python scripts/strategies/gradient/live/daily_summary.py
 
 # Deactivate
 deactivate

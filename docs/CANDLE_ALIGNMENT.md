@@ -55,10 +55,10 @@ This document ensures live trading uses the exact same candle alignment as the b
 
 ```bash
 # WRONG (runs exactly at candle close):
-0 */4 * * * /root/slipstream/scripts/live/gradient_rebalance.sh
+0 */4 * * * /root/slipstream/scripts/strategies/gradient/live/rebalance.sh
 
 # CORRECT (1-minute buffer for data availability):
-1 */4 * * * /root/slipstream/scripts/live/gradient_rebalance.sh
+1 */4 * * * /root/slipstream/scripts/strategies/gradient/live/rebalance.sh
 ```
 
 This runs at:
@@ -156,7 +156,7 @@ crontab -l | grep gradient_rebalance
 
 Should show:
 ```
-1 */4 * * * /root/slipstream/scripts/live/gradient_rebalance.sh
+1 */4 * * * /root/slipstream/scripts/strategies/gradient/live/rebalance.sh
 ```
 
 NOT:
@@ -208,7 +208,7 @@ A: Most do, but always verify! This doc is specific to Hyperliquid. Other exchan
 ```bash
 crontab -e
 # Change to:
-1 */4 * * * /root/slipstream/scripts/live/gradient_rebalance.sh
+1 */4 * * * /root/slipstream/scripts/strategies/gradient/live/rebalance.sh
 ```
 
 ### Issue: Signals don't match backtest expectations
@@ -278,7 +278,7 @@ uv run python scripts/verify_candle_alignment.py
 
 **Correct Cron:**
 ```bash
-1 */4 * * * /root/slipstream/scripts/live/gradient_rebalance.sh
+1 */4 * * * /root/slipstream/scripts/strategies/gradient/live/rebalance.sh
 ```
 
 ✅ Match these exactly, and your live performance will match the backtest.

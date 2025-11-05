@@ -4,10 +4,10 @@ from types import SimpleNamespace
 import numpy as np
 import pandas as pd
 
-from slipstream.gradient.live.data import compute_live_signals
-from slipstream.gradient.live.portfolio import construct_target_portfolio
-from slipstream.gradient.portfolio import construct_gradient_portfolio
-from slipstream.gradient.signals import compute_trend_strength
+from slipstream.strategies.gradient.live.data import compute_live_signals
+from slipstream.strategies.gradient.live.portfolio import construct_target_portfolio
+from slipstream.strategies.gradient.portfolio import construct_gradient_portfolio
+from slipstream.strategies.gradient.signals import compute_trend_strength
 
 
 def _build_config():

@@ -15,7 +15,7 @@ import pandas as pd
 # Add project root to path
 sys.path.insert(0, str(Path(__file__).parent / 'src'))
 
-from slipstream.signals import compute_multifactor_residuals
+from slipstream.core.signals import compute_multifactor_residuals
 
 
 def generate_synthetic_data(n_timestamps=100, n_assets=20, random_seed=42):

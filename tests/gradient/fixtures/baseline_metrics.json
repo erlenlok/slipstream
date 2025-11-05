@@ -1,0 +1,9 @@
+{
+  "periods": 128,
+  "cumulative_return": -4.008173356085574,
+  "annualized_sharpe": -2.722130193584623,
+  "max_drawdown": -2.382882095667548,
+  "avg_gross_exposure": 179.64085062280955,
+  "avg_active_assets": 3.53125,
+  "avg_turnover": 116.33606744961227
+}

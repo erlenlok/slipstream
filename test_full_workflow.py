@@ -17,8 +17,8 @@ from hyperliquid.info import Info
 from hyperliquid.exchange import Exchange
 from hyperliquid.utils import constants
 from eth_account import Account
-from slipstream.gradient.live.config import load_config
-from slipstream.gradient.live.execution import get_current_positions
+from slipstream.strategies.gradient.live.config import load_config
+from slipstream.strategies.gradient.live.execution import get_current_positions
 
 
 def main():

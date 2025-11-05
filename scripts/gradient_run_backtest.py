@@ -1,14 +1,19 @@
 #!/usr/bin/env python
-"""
-Run a lightweight Gradient backtest using pre-computed returns (and optionally signals).
-"""
+"""Compatibility wrapper for scripts/strategies/gradient/run_backtest.py."""
 
-from slipstream.gradient.cli import run_backtest_cli
+import warnings
+
+from scripts.strategies.gradient.run_backtest import main
 
 
-def main() -> None:
-    run_backtest_cli()
+def _run() -> None:
+    warnings.warn(
+        "Use scripts/strategies/gradient/run_backtest.py (or `uv run gradient-backtest`).",
+        DeprecationWarning,
+        stacklevel=2,
+    )
+    main()
 
 
 if __name__ == "__main__":
-    main()
+    _run()

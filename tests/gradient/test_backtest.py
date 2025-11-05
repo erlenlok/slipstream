@@ -1,7 +1,7 @@
 import numpy as np
 import pandas as pd
 
-from slipstream.gradient.backtest import run_gradient_backtest
+from slipstream.strategies.gradient.backtest import run_gradient_backtest
 
 
 def test_run_gradient_backtest_produces_outputs():

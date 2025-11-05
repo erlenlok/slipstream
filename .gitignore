@@ -1,6 +1,11 @@
 # Project-local environments
 .venv/
 
+# Environment secrets
+.env
+.env.*
+!.env.*.example
+
 # Python cache
 __pycache__/
 *.py[cod]

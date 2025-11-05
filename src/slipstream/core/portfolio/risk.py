@@ -10,6 +10,8 @@ import numpy as np
 import pandas as pd
 from typing import Tuple
 
+from ..signals import compute_idiosyncratic_returns
+
 
 def compute_idiosyncratic_covariance(
     returns: pd.DataFrame,
@@ -31,8 +33,6 @@ def compute_idiosyncratic_covariance(
     Returns:
         Covariance matrix of idiosyncratic returns
     """
-    from slipstream.signals import compute_idiosyncratic_returns
-
     # Compute idiosyncratic returns
     idio_returns = compute_idiosyncratic_returns(returns, loadings, market_factor)
 

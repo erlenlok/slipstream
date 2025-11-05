@@ -1,16 +1,15 @@
 """
-Funding rate prediction utilities.
-
-Provides data preparation helpers for forecasting future funding payments
-within the Slipstream framework.
+Compatibility wrapper for ``slipstream.funding`` redirecting to
+``slipstream.core.funding``.
 """
 
-from slipstream.funding.data_prep import (
-    compute_forward_funding,
-    prepare_funding_training_data,
-)
+from importlib import import_module as _import_module
+import sys as _sys
 
-__all__ = [
-    "compute_forward_funding",
-    "prepare_funding_training_data",
-]
+_core_pkg = _import_module("slipstream.core.funding")
+
+__all__ = getattr(_core_pkg, "__all__", [])
+for _name in __all__:
+    globals()[_name] = getattr(_core_pkg, _name)
+
+_sys.modules[__name__] = _core_pkg

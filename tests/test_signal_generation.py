@@ -10,7 +10,7 @@ import numpy as np
 # Add src to path
 sys.path.insert(0, str(Path(__file__).parent / 'src'))
 
-from slipstream.signals.idiosyncratic_momentum import (
+from slipstream.core.signals.idiosyncratic_momentum import (
     idiosyncratic_momentum,
     compute_idiosyncratic_returns,
 )

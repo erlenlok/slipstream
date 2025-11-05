@@ -14,12 +14,12 @@ from typing import Optional, Callable
 
 from slipstream.alpha.data_prep import BASE_INTERVAL_HOURS
 
-from slipstream.portfolio.optimizer import (
+from .optimizer import (
     optimize_portfolio,
     optimize_portfolio_with_costs,
     round_to_lots,
 )
-from slipstream.portfolio.costs import (
+from .costs import (
     TransactionCostModel,
     compute_transaction_costs,
 )

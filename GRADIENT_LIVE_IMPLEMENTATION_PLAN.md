@@ -29,7 +29,7 @@ Strategy characteristics:
 - [ ] Update pyproject.toml with hyperliquid dependency
 
 ### Phase 2: Signal Generation (1 hour)
-**File: `src/slipstream/gradient/live/data.py`**
+**File: `src/slipstream/strategies/gradient/live/data.py`**
 
 Implement `fetch_live_data()` and `compute_live_signals()`:
 
@@ -62,7 +62,7 @@ def compute_live_signals(market_data, config):
     pass
 ```
 
-**Reuse existing code** from `src/slipstream/gradient/sensitivity.py`:
+**Reuse existing code** from `src/slipstream/strategies/gradient/sensitivity.py`:
 - `compute_log_returns()`
 - `compute_ewma_vol()`
 - `compute_adv_usd()`
@@ -70,7 +70,7 @@ def compute_live_signals(market_data, config):
 - Multi-span momentum logic
 
 ### Phase 3: Portfolio Construction (30 min)
-**File: `src/slipstream/gradient/live/portfolio.py`**
+**File: `src/slipstream/strategies/gradient/live/portfolio.py`**
 
 Implement `construct_target_portfolio()`:
 
@@ -92,7 +92,7 @@ def construct_target_portfolio(signals, config):
 ```
 
 ### Phase 4: Order Execution with Passive → Aggressive (3-4 hours)
-**File: `src/slipstream/gradient/live/execution.py`**
+**File: `src/slipstream/strategies/gradient/live/execution.py`**
 
 This is the most complex part. Implement multi-stage execution:
 
@@ -224,7 +224,7 @@ def place_market_orders(unfilled_deltas, sdk, config):
 ```
 
 ### Phase 5: Main Orchestrator (30 min)
-**File: `src/slipstream/gradient/live/rebalance.py`**
+**File: `src/slipstream/strategies/gradient/live/rebalance.py`**
 
 Already mostly implemented. Update to use new execution logic:
 
@@ -257,7 +257,7 @@ def run_rebalance():
 ```
 
 ### Phase 6: Cron Setup (15 min)
-**File: `scripts/live/gradient_rebalance.sh`**
+**File: `scripts/strategies/gradient/live/rebalance.sh`**
 
 Already created. Just needs testing.
 
@@ -269,7 +269,7 @@ Set up cron:
 crontab -e
 
 # CORRECT: Runs at :01 of each 4-hour boundary (00:01, 04:01, 08:01, etc. UTC)
-1 */4 * * * /root/slipstream/scripts/live/gradient_rebalance.sh >> /var/log/gradient/cron.log 2>&1
+1 */4 * * * /root/slipstream/scripts/strategies/gradient/live/rebalance.sh >> /var/log/gradient/cron.log 2>&1
 
 # WRONG: DO NOT USE :00
 # 0 */4 * * * ... ← This may fetch incomplete candle data!
@@ -369,10 +369,10 @@ export HYPERLIQUID_SECRET="your_secret_key"
 ### Stop Trading Immediately
 ```bash
 # Cancel all open orders
-python scripts/live/gradient_emergency_stop.py --cancel-orders
+python scripts/strategies/gradient/live/emergency_stop.py --cancel-orders
 
 # Flatten all positions (go to cash)
-python scripts/live/gradient_emergency_stop.py --flatten-all
+python scripts/strategies/gradient/live/emergency_stop.py --flatten-all
 ```
 
 ### Disable Cron
@@ -401,13 +401,13 @@ crontab -e
 ## Files to Modify/Create
 
 ### Modify (already exist, need implementation)
-1. `src/slipstream/gradient/live/data.py` - Signal generation
-2. `src/slipstream/gradient/live/portfolio.py` - Portfolio construction
-3. `src/slipstream/gradient/live/execution.py` - Order execution
-4. `src/slipstream/gradient/live/rebalance.py` - Update to use SDK
+1. `src/slipstream/strategies/gradient/live/data.py` - Signal generation
+2. `src/slipstream/strategies/gradient/live/portfolio.py` - Portfolio construction
+3. `src/slipstream/strategies/gradient/live/execution.py` - Order execution
+4. `src/slipstream/strategies/gradient/live/rebalance.py` - Update to use SDK
 
 ### Create (new files)
-1. `src/slipstream/gradient/live/websocket_monitor.py` - WebSocket fill monitoring
+1. `src/slipstream/strategies/gradient/live/websocket_monitor.py` - WebSocket fill monitoring
 2. `tests/test_gradient_live.py` - Unit tests for live trading
 
 ### Update (configuration)

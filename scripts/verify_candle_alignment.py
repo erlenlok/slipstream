@@ -181,10 +181,10 @@ UPDATED CRON COMMAND:
 crontab -e
 
 # Change from:
-0 */4 * * * /root/slipstream/scripts/live/gradient_rebalance.sh
+0 */4 * * * /root/slipstream/scripts/strategies/gradient/live/rebalance.sh
 
 # To (with 1-minute buffer):
-1 */4 * * * /root/slipstream/scripts/live/gradient_rebalance.sh
+1 */4 * * * /root/slipstream/scripts/strategies/gradient/live/rebalance.sh
 
 This ensures we:
 1. Wait for candle to fully close and data to be available

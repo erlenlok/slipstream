@@ -1,27 +1,14 @@
 """
-Signal generation for return predictions.
-
-This module provides the core signal computation functions for the Slipstream strategy.
-All signals are pure DataFrame transformations that can be imported into notebooks and
-used as the single source of truth for research and production.
+Compatibility wrapper for ``slipstream.signals`` -> ``slipstream.core.signals``.
 """
 
-from slipstream.signals.idiosyncratic_momentum import (
-    idiosyncratic_momentum,
-    compute_idiosyncratic_returns,
-    compute_multifactor_residuals,
-)
-from slipstream.signals.utils import (
-    align_signals_to_universe,
-    normalize_signal_cross_sectional,
-    compute_signal_autocorrelation,
-)
+from importlib import import_module as _import_module
+import sys as _sys
 
-__all__ = [
-    "idiosyncratic_momentum",
-    "compute_idiosyncratic_returns",
-    "compute_multifactor_residuals",
-    "align_signals_to_universe",
-    "normalize_signal_cross_sectional",
-    "compute_signal_autocorrelation",
-]
+_core_pkg = _import_module("slipstream.core.signals")
+
+__all__ = getattr(_core_pkg, "__all__", [])
+for _name in __all__:
+    globals()[_name] = getattr(_core_pkg, _name)
+
+_sys.modules[__name__] = _core_pkg

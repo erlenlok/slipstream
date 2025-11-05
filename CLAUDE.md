@@ -14,9 +14,31 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - `docs/volume_weighted_pca_research.md` - Research on volume weighting methodologies
 - `docs/volume_weighted_pca_implementation.md` - Implementation details for volume-weighted PCA
 - `docs/QUICKSTART_VOLUME_PCA.md` - Practical guide for H* optimization workflow
-- `docs/GRADIENT.md` - Gradient companion strategy overview and workflow ✨ NEW
+- `docs/strategies/gradient/README.md` - Gradient companion strategy overview and workflow ✨ NEW
 
 This context is essential for understanding the research goals, implementation decisions, and current state of the framework.
+
+## ⚠️ CRITICAL: Live Trading Safety
+
+**NEVER run live trading scripts without explicit user permission.**
+
+The following scripts execute REAL trades with REAL money:
+- `scripts/strategies/gradient/live/rebalance.sh` - Live rebalance script (called by cron)
+- `python -m slipstream.strategies.gradient.live.rebalance` - Direct rebalance execution
+- Any command that executes the gradient live trading module
+
+**Rules:**
+1. NEVER run these scripts for testing or verification purposes
+2. NEVER run these scripts to "check if they work"
+3. ALWAYS ask for explicit permission before executing any live trading code
+4. If you need to test functionality, ask the user to run it manually
+5. When debugging live trading issues, analyze logs and code only - do not execute
+
+**Violation of these rules can result in:**
+- Unintended trades
+- Financial losses
+- Position mismanagement
+- API rate limiting or bans
 
 ## Repository Status
 
