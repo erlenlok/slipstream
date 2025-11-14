@@ -1,0 +1,60 @@
+# Reference single-asset config for minimal-size prod testing.
+# Copy this file, adjust spreads/order size/tick size for your listing,
+# then pass --config </path/to/file> to the Brawler CLI.
+
+assets:
+  BTC:
+    symbol: BTC
+    cex_symbol: btcusdt
+    base_spread: 0.0015          # 15 bps base spread
+    volatility_lookback: 90      # samples (~45s @ 500ms tick)
+    risk_aversion: 4.0           # widens spreads with sigma
+    basis_alpha: 0.08            # EMA smoothing for basis
+    max_inventory: 1.0           # caps directional risk per asset
+    inventory_aversion: 0.4      # skew quotes when inventory builds
+    order_size: 0.02             # keep tiny while testing in prod
+    max_volatility: 0.03         # suspend when sigma > 3%
+    max_basis_deviation: 0.0075  # halt if HL deviates too far from CEX
+    min_quote_interval_ms: 750   # throttle cancel/replace cadence
+    reduce_only_ratio: 0.9       # inventory clamp before resuming
+    tick_size: 0.1               # Hyperliquid price tick for BTC
+    quote_reprice_tolerance_ticks: 2.0  # skip cancels if <2 ticks away
+
+risk:
+  tick_interval_ms: 500
+  resume_backoff_seconds: 5
+  cex_queue_maxsize: 2000
+  local_queue_maxsize: 2000
+  fill_queue_maxsize: 1000
+
+kill_switch:
+  max_feed_lag_seconds: 2
+  max_disconnection_seconds: 10
+
+binance_ws_url: "wss://fstream.binance.com"
+hyperliquid_ws_url: "wss://api.hyperliquid.xyz/ws"
+hyperliquid_rest_url: "https://api.hyperliquid.xyz"
+state_snapshot_path: "logs/brawler_state_snapshot.json"
+hyperliquid_api_key: "${HYPERLIQUID_API_KEY}"
+hyperliquid_api_secret: "${HYPERLIQUID_API_SECRET}"
+hyperliquid_main_wallet: "${HYPERLIQUID_MAIN_WALLET}"
+
+portfolio:
+  max_gross_inventory: 0.5
+  halt_ratio: 1.0
+  resume_ratio: 0.75
+  reduce_only_ratio: 0.85
+  taper_start_ratio: 0.5
+  min_order_size_ratio: 0.2
+
+candidate_screening:
+  min_samples: 5000
+  align_tolerance_ms: 750
+  sigma_ratio_min: 0.8
+  sigma_ratio_max: 1.2
+  max_mean_basis_ticks: 2.0
+  max_basis_std_ticks: 1.0
+  min_spread_ratio: 2.5
+  min_depth_multiple: 3.0
+  max_funding_std: 0.02
+  score_min: 0.0

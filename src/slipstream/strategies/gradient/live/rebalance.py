@@ -82,7 +82,7 @@ def run_rebalance():
 
         # Step 2: Compute signals
         logger.info("Computing momentum signals...")
-        signals = compute_live_signals(market_data, config)
+        signals, log_returns = compute_live_signals(market_data, config)
         validate_signals(signals, config)
         logger.info(f"Computed signals for {len(signals)} assets")
 
@@ -186,7 +186,7 @@ def run_rebalance():
 
         # Step 3: Construct target portfolio
         logger.info("Constructing target portfolio...")
-        target_positions = construct_target_portfolio(signals, config)
+        target_positions = construct_target_portfolio(signals, log_returns, config)
         n_long = sum(1 for p in target_positions.values() if p > 0)
         n_short = sum(1 for p in target_positions.values() if p < 0)
         total_long = sum(p for p in target_positions.values() if p > 0)

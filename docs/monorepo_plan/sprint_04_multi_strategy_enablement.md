@@ -22,11 +22,11 @@
    - Host post-mortem/retro and update docs with lessons learned.
 
 ## Backlog Highlights
-- [ ] Implement strategy registry (`strategies/__init__.py`) enumerating available strategies + metadata.
-- [ ] Build `scripts/strategies/run_backtest.py` supporting `--strategy` flag.
-- [ ] Add documentation for secrets management per strategy (env var naming convention).
-- [ ] Publish onboarding checklist and retro report.
-- [ ] Update README badges/status to reflect multi-strategy readiness.
+- [x] Implement strategy registry (`strategies/__init__.py`) enumerating available strategies + metadata.
+- [x] Build `scripts/strategies/run_backtest.py` supporting `--strategy` flag.
+- [x] Add documentation for secrets management per strategy (env var naming convention).
+- [x] Publish onboarding checklist and retro report.
+- [x] Update README badges/status to reflect multi-strategy readiness.
 
 ## Dependencies & Coordination
 - Requires Gradient fully migrated (Sprint 03 DoD met).
@@ -48,4 +48,3 @@
 - Time to scaffold new strategy < 10 minutes.
 - 100% of CI jobs tagged per strategy passing.
 - Gradient certification report completed and archived.
-

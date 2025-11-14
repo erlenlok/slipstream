@@ -6,13 +6,21 @@ from typing import Dict
 import numpy as np
 import pandas as pd
 
+# Import unified portfolio construction from backtest module
+from slipstream.strategies.gradient.portfolio import construct_gradient_portfolio
 
-def construct_target_portfolio(signals: pd.DataFrame, config) -> Dict[str, float]:
+
+def construct_target_portfolio(
+    signals: pd.DataFrame,
+    log_returns: pd.DataFrame,  # NEW: needed for VAR method
+    config
+) -> Dict[str, float]:
     """
-    Construct target portfolio from momentum signals.
+    Construct target portfolio from momentum signals using unified portfolio construction.
 
     Args:
         signals: DataFrame with columns: asset, momentum_score, vol_24h, adv_usd, include_in_universe
+        log_returns: Wide DataFrame of recent 4h log returns (for VAR covariance estimation)
         config: GradientConfig instance
 
     Returns:
@@ -49,24 +57,63 @@ def construct_target_portfolio(signals: pd.DataFrame, config) -> Dict[str, float
         f"({config.concentration_pct}% of {n_liquid} liquid assets)"
     )
 
-    # Select top N% (highest momentum = long) and bottom N% (lowest momentum = short)
-    long_assets = liquid.head(n_select)
-    short_assets = liquid.tail(n_select)
+    # Convert signals to format expected by construct_gradient_portfolio
+    # Need: trend_strength (wide) and log_returns (wide)
 
-    # Compute weights
-    weights_long = compute_weights(long_assets, config.weight_scheme, "long")
-    weights_short = compute_weights(short_assets, config.weight_scheme, "short")
+    # Create single-row wide DataFrames for current rebalance
+    trend_strength_wide = pd.DataFrame(
+        [liquid.set_index('asset')['momentum_score'].to_dict()],
+        index=[pd.Timestamp.now()]
+    )
+
+    # Ensure log_returns has same columns as trend_strength
+    # Use only columns that exist in both
+    common_assets = list(set(trend_strength_wide.columns) & set(log_returns.columns))
+    trend_strength_wide = trend_strength_wide[common_assets]
+    log_returns_aligned = log_returns[common_assets]
+
+    # Call unified portfolio construction
+    if config.risk_method == "var":
+        # Use VAR-based allocation
+        print(f"  Using VAR-based risk balancing (target: {config.target_side_var*100:.1f}% per side)")
+        weights_df = construct_gradient_portfolio(
+            trend_strength=trend_strength_wide,
+            log_returns=log_returns_aligned,
+            top_n=n_select,
+            bottom_n=n_select,
+            risk_method="var",
+            target_side_var=config.target_side_var,
+            var_lookback_days=config.var_lookback_days,
+        )
+    else:
+        # Use legacy dollar-vol allocation
+        print(f"  Using legacy dollar-vol balancing (scheme: {config.weight_scheme})")
+        # Map weight_scheme to equivalent vol_span usage
+        # inverse_vol uses volatility, equal doesn't
+        target_dollar_vol = 1.0  # Normalized, will scale later
+        weights_df = construct_gradient_portfolio(
+            trend_strength=trend_strength_wide,
+            log_returns=log_returns_aligned,
+            top_n=n_select,
+            bottom_n=n_select,
+            risk_method="dollar_vol",
+            target_side_dollar_vol=target_dollar_vol,
+            vol_span=config.vol_span,
+        )
+
+    # Extract weights from last row (only row)
+    weights_series = weights_df.iloc[-1]
+    weights_dict = weights_series[weights_series != 0].to_dict()
 
     # Scale to dollar amounts
     # Each side gets 100% of capital (gross exposure = 2x)
     capital_per_side = config.capital_usd
     positions = {}
 
-    for asset, weight in weights_long.items():
+    for asset, weight in weights_dict.items():
+        # Weights are already normalized by construct_gradient_portfolio
+        # Scale to capital
         positions[asset] = weight * capital_per_side
-
-    for asset, weight in weights_short.items():
-        positions[asset] = weight * capital_per_side  # Already negative from compute_weights
 
     # Apply position size limits
     positions = apply_position_limits(positions, config)

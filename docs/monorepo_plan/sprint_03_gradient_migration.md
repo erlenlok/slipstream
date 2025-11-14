@@ -27,9 +27,9 @@
 ## Backlog Highlights
 - [x] Update `config/gradient_live.*` to new layered config structure.
 - [x] Provide backwards-compatible CLI wrappers (deprecated warnings) for existing ops scripts.
-- [ ] Capture baseline metrics (universe size, turnover, PnL) and diff after migration. *(Tooling landed via `scripts/strategies/gradient/capture_baseline.py`)*
-- [ ] Update documentation (deployment, monitoring) to reflect new paths/commands.
-- [ ] Pair with ops for one supervised live rebalance after cutover.
+- [x] Capture baseline metrics (universe size, turnover, PnL) and diff after migration. *(Tooling landed via `scripts/strategies/gradient/capture_baseline.py`)*
+- [x] Update documentation (deployment, monitoring) to reflect new paths/commands.
+- [x] Pair with ops for one supervised live rebalance after cutover.
 
 ## Dependencies & Coordination
 - Requires core services from Sprint 02 to be stable.
@@ -55,4 +55,4 @@
 ## Status (2025-11-05)
 - ✅ Legacy import paths now emit deprecation warnings while forwarding to `slipstream.strategies.gradient.*` modules.
 - ✅ Layered config loader integrated with Gradient live configuration; regression tests updated.
-- ⚙️ Backtest/execution parity verification and telemetry capture to be completed in collaboration with ops.
+- ✅ Baseline metrics captured, docs updated, and supervised live rebalance completed with parity confirmed.

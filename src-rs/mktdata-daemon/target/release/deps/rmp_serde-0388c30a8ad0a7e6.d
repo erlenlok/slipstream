@@ -1,0 +1,12 @@
+/root/slipstream/src-rs/mktdata-daemon/target/release/deps/rmp_serde-0388c30a8ad0a7e6.d: /root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/rmp-serde-1.3.0/src/lib.rs /root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/rmp-serde-1.3.0/src/bytes.rs /root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/rmp-serde-1.3.0/src/config.rs /root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/rmp-serde-1.3.0/src/decode.rs /root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/rmp-serde-1.3.0/src/encode.rs /root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/rmp-serde-1.3.0/src/../README.md
+
+/root/slipstream/src-rs/mktdata-daemon/target/release/deps/librmp_serde-0388c30a8ad0a7e6.rlib: /root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/rmp-serde-1.3.0/src/lib.rs /root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/rmp-serde-1.3.0/src/bytes.rs /root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/rmp-serde-1.3.0/src/config.rs /root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/rmp-serde-1.3.0/src/decode.rs /root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/rmp-serde-1.3.0/src/encode.rs /root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/rmp-serde-1.3.0/src/../README.md
+
+/root/slipstream/src-rs/mktdata-daemon/target/release/deps/librmp_serde-0388c30a8ad0a7e6.rmeta: /root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/rmp-serde-1.3.0/src/lib.rs /root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/rmp-serde-1.3.0/src/bytes.rs /root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/rmp-serde-1.3.0/src/config.rs /root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/rmp-serde-1.3.0/src/decode.rs /root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/rmp-serde-1.3.0/src/encode.rs /root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/rmp-serde-1.3.0/src/../README.md
+
+/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/rmp-serde-1.3.0/src/lib.rs:
+/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/rmp-serde-1.3.0/src/bytes.rs:
+/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/rmp-serde-1.3.0/src/config.rs:
+/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/rmp-serde-1.3.0/src/decode.rs:
+/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/rmp-serde-1.3.0/src/encode.rs:
+/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/rmp-serde-1.3.0/src/../README.md:

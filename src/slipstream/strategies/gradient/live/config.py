@@ -16,9 +16,14 @@ class GradientConfig:
     capital_usd: float
     concentration_pct: float
     rebalance_freq_hours: int
-    weight_scheme: str
+    weight_scheme: str  # Legacy: "equal" or "inverse_vol"
     lookback_spans: List[int]
-    vol_span: int
+    vol_span: int  # Legacy: for EWMA vol
+
+    # VAR-based risk parameters (new)
+    risk_method: str = "dollar_vol"  # "dollar_vol" (legacy) or "var" (new)
+    target_side_var: float = 0.02  # Target one-day VAR per side
+    var_lookback_days: int = 60  # Days for covariance estimation
 
     # Risk limits
     max_position_pct: float
@@ -134,6 +139,10 @@ def load_config(
         weight_scheme=raw_config["weight_scheme"],
         lookback_spans=raw_config["lookback_spans"],
         vol_span=raw_config["vol_span"],
+        # VAR parameters (with defaults for backward compatibility)
+        risk_method=raw_config.get("risk_method", "dollar_vol"),
+        target_side_var=raw_config.get("target_side_var", 0.02),
+        var_lookback_days=raw_config.get("var_lookback_days", 60),
         max_position_pct=raw_config["max_position_pct"],
         max_total_leverage=raw_config["max_total_leverage"],
         emergency_stop_drawdown_pct=raw_config["emergency_stop_drawdown_pct"],
@@ -177,6 +186,22 @@ def validate_config(config: GradientConfig) -> None:
             f"weight_scheme must be 'equal' or 'inverse_vol', got {config.weight_scheme}"
         )
 
+    # Validate VAR parameters
+    if config.risk_method not in ["dollar_vol", "var"]:
+        raise ValueError(
+            f"risk_method must be 'dollar_vol' or 'var', got {config.risk_method}"
+        )
+
+    if config.risk_method == "var":
+        if config.target_side_var <= 0:
+            raise ValueError(
+                f"target_side_var must be positive, got {config.target_side_var}"
+            )
+        if config.var_lookback_days < 30:
+            raise ValueError(
+                f"var_lookback_days must be >= 30, got {config.var_lookback_days}"
+            )
+
     if config.max_position_pct <= 0 or config.max_position_pct > 100:
         raise ValueError(
             f"max_position_pct must be in (0, 100], got {config.max_position_pct}"
@@ -194,5 +219,10 @@ def validate_config(config: GradientConfig) -> None:
     print(f"  Capital: ${config.capital_usd:,.2f}")
     print(f"  Concentration: {config.concentration_pct}%")
     print(f"  Rebalance: Every {config.rebalance_freq_hours}h")
-    print(f"  Weighting: {config.weight_scheme}")
+    print(f"  Risk Method: {config.risk_method}")
+    if config.risk_method == "var":
+        print(f"    Target VAR: {config.target_side_var*100:.1f}% (per side, 1-day, 95% confidence)")
+        print(f"    VAR Lookback: {config.var_lookback_days} days")
+    else:
+        print(f"    Weighting: {config.weight_scheme} (legacy)")
     print(f"  Dry-run: {config.dry_run}")

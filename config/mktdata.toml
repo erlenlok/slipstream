@@ -1,0 +1,29 @@
+# Slipstream Market Data Daemon Configuration
+
+[daemon]
+socket_path = "/tmp/slipstream-mktdata.sock"  # Development: /tmp, Production: /var/run/slipstream/
+log_level = "info"
+log_path = "/var/log/slipstream/mktdata.log"
+
+[retention]
+# How much history to keep in memory
+candles_4h_count = 1200  # ~200 days
+candles_1h_count = 2000  # ~83 days
+orderbook_snapshots_per_symbol = 100
+trades_per_symbol = 1000
+
+[venues.hyperliquid]
+enabled = true
+websocket_url = "wss://api.hyperliquid.xyz/ws"
+reconnect_delay_ms = 1000
+max_reconnect_delay_ms = 30000
+
+[venues.binance]
+enabled = false  # TODO: Implement Binance client
+websocket_url = "wss://fstream.binance.com/ws"
+reconnect_delay_ms = 1000
+max_reconnect_delay_ms = 30000
+
+[health]
+metrics_port = 9090
+watchdog_interval_ms = 5000

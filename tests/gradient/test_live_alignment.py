@@ -59,7 +59,7 @@ class LiveGradientAlignmentTests(unittest.TestCase):
     def test_live_signals_align_with_backtest_scores(self):
         config = _build_config()
         panel = _build_panel()
-        signals = compute_live_signals({"panel": panel}, config)
+        signals, _ = compute_live_signals({"panel": panel}, config)
 
         prices = panel.pivot(index="timestamp", columns="asset", values="close")
         log_returns = np.log(prices / prices.shift(1))
@@ -83,7 +83,7 @@ class LiveGradientAlignmentTests(unittest.TestCase):
         config = _build_config()
         panel = _build_panel()
 
-        signals = compute_live_signals({"panel": panel}, config)
+        signals, log_returns_live = compute_live_signals({"panel": panel}, config)
         liquid_assets = signals.loc[signals["include_in_universe"], "asset"].tolist()
 
         prices = panel.pivot(index="timestamp", columns="asset", values="close")
@@ -113,7 +113,7 @@ class LiveGradientAlignmentTests(unittest.TestCase):
         expected_longs = {asset for asset, weight in latest.items() if weight > 0}
         expected_shorts = {asset for asset, weight in latest.items() if weight < 0}
 
-        live_positions = construct_target_portfolio(signals, config)
+        live_positions = construct_target_portfolio(signals, log_returns_live, config)
         live_longs = {asset for asset, size in live_positions.items() if size > 0}
         live_shorts = {asset for asset, size in live_positions.items() if size < 0}
 

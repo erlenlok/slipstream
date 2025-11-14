@@ -343,7 +343,7 @@ def fetch_live_data(config) -> Dict[str, Any]:
     }
 
 
-def compute_live_signals(market_data: Dict[str, Any], config) -> pd.DataFrame:
+def compute_live_signals(market_data: Dict[str, Any], config) -> tuple[pd.DataFrame, pd.DataFrame]:
     """
     Compute momentum signals from market data.
 
@@ -352,8 +352,10 @@ def compute_live_signals(market_data: Dict[str, Any], config) -> pd.DataFrame:
         config: GradientConfig instance
 
     Returns:
-        DataFrame with columns: [asset, momentum_score, vol_24h, adv_usd, include_in_universe]
-        Sorted by momentum_score descending (for latest timestamp only)
+        Tuple of:
+            - signals: DataFrame with columns: [asset, momentum_score, vol_24h, adv_usd, include_in_universe]
+                      Sorted by momentum_score descending (for latest timestamp only)
+            - log_returns_wide: Wide DataFrame of log returns (needed for VAR portfolio construction)
     """
     panel = market_data["panel"].copy()
 
@@ -425,7 +427,7 @@ def compute_live_signals(market_data: Dict[str, Any], config) -> pd.DataFrame:
 
     print(f"Computed signals for {len(signals)} assets (latest timestamp: {latest_time})")
 
-    return signals
+    return signals, log_returns_wide
 
 
 def validate_market_data(market_data: Dict[str, Any]) -> None:
