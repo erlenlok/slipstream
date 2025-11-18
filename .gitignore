@@ -22,3 +22,4 @@ logs/
 .ruff_cache/
 .pytest_cache/
 gradient_backtest_results.png
+src-rs/mktdata-daemon/target/
