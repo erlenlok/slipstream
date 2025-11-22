@@ -35,6 +35,7 @@ notebook = [
 hl-load = "slipstream.__main__:main"
 gradient-signals = "slipstream.strategies.gradient.cli:compute_signals_cli"
 gradient-backtest = "slipstream.strategies.gradient.cli:run_backtest_cli"
+volume-generator = "slipstream.strategies.volume_generator.cli:run_volume_generator_cli"
 
 [build-system]
 requires = ["hatchling"]

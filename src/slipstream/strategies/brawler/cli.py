@@ -34,8 +34,8 @@ def _parse_args(argv: Optional[Iterable[str]] = None) -> argparse.Namespace:
     )
     parser.add_argument(
         "--wallet",
-        default=os.getenv("HYPERLIQUID_MAIN_WALLET"),
-        help="Wallet address used for inventory tracking (default: HYPERLIQUID_MAIN_WALLET env var).",
+        default=os.getenv("HYPERLIQUID_BRAWLER_WALLET") or os.getenv("HYPERLIQUID_MAIN_WALLET"),
+        help="Wallet address used for inventory tracking (default: HYPERLIQUID_BRAWLER_WALLET env var, with HYPERLIQUID_MAIN_WALLET fallback).",
     )
     parser.add_argument(
         "--inventory-file",
@@ -59,7 +59,7 @@ async def _run_loop(
     config = load_brawler_config(config_path)
     resolved_api_key = _resolve_secret(api_key, config.hyperliquid_api_key, "HYPERLIQUID_API_KEY")
     resolved_api_secret = _resolve_secret(api_secret, config.hyperliquid_api_secret, "HYPERLIQUID_API_SECRET")
-    resolved_wallet = wallet or config.hyperliquid_main_wallet or os.getenv("HYPERLIQUID_MAIN_WALLET")
+    resolved_wallet = wallet or config.hyperliquid_main_wallet or os.getenv("HYPERLIQUID_BRAWLER_WALLET") or os.getenv("HYPERLIQUID_MAIN_WALLET")
     if not resolved_api_key or not resolved_api_secret:
         raise SystemExit(
             "Hyperliquid API credentials are required via CLI args, config file, or environment."

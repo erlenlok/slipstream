@@ -1,15 +1,15 @@
 """
-Alpha model training framework.
+Alpha model framework.
 
-This module implements the bootstrap methodology for training predictive alpha models
-on vol-normalized idiosyncratic returns, adapted from Schmidhuber (2021).
+This module provides data preparation functions for predictive models
+on vol-normalized idiosyncratic returns. Some components have been moved to
+legacy for historical reference.
 
 Key components:
 - data_prep: Feature engineering (momentum + funding) and target construction
-- training: Ridge regression with bootstrap for coefficient estimation
-- validation: Walk-forward cross-validation for out-of-sample performance
+- Legacy training components are in the legacy folder
 
-Reference: docs/ALPHA_MODEL_TRAINING.md
+Reference: legacy documentation for historical H* optimization
 """
 
 from slipstream.alpha.data_prep import (
@@ -18,17 +18,11 @@ from slipstream.alpha.data_prep import (
     compute_forward_returns,
 )
 
-from slipstream.alpha.training import (
-    find_optimal_lambda,
-    bootstrap_train_alpha_model,
-    train_alpha_model_complete,
-)
+# Legacy training functions have been moved to legacy folder
+# See legacy/src/slipstream/alpha/training.py for historical reference
 
 __all__ = [
     'prepare_alpha_training_data',
     'compute_funding_features',
     'compute_forward_returns',
-    'find_optimal_lambda',
-    'bootstrap_train_alpha_model',
-    'train_alpha_model_complete',
 ]

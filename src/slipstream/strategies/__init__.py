@@ -71,6 +71,15 @@ STRATEGY_REGISTRY: Dict[str, StrategyInfo] = {
             "run_backtest": "slipstream.strategies.brawler.cli.run_backtest_cli",
         },
     ),
+    "volume_generator": StrategyInfo(
+        key="volume_generator",
+        title="Volume Generator Bot",
+        module="slipstream.strategies.volume_generator",
+        description="Generates volume by making 42 in-and-out BTC trades.",
+        cli_entrypoints={
+            "run_volume_gen": "slipstream.strategies.volume_generator.cli.run_volume_generator_cli",
+        },
+    ),
 }
 
 

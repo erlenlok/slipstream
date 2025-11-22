@@ -5,11 +5,26 @@
 
 **Beta-neutral statistical arbitrage framework for Hyperliquid perpetual futures.**
 
-Slipstream is a multi-strategy framework that includes various approaches to trading perpetual futures with risk management, dynamically rebalancing to maximize risk-adjusted returns while hedging systematic market exposure.
+Slipstream combines price momentum and funding rate predictions to trade a market-neutral portfolio, dynamically rebalancing to maximize risk-adjusted returns while hedging systematic market exposure.
 
 ## 🎯 Strategy Characterization
 
-The framework supports multiple strategies with different approaches to market neutrality and risk management. The original H* optimization research has been moved to legacy modules for historical reference.
+Based on joint H* optimization across holding periods [4, 8, 12, 24, 48] hours:
+
+**Optimal Holding Period: H* = 8 hours**
+
+| Component | R² (OOS) | Contribution |
+|-----------|----------|--------------|
+| **Funding Rate Prediction** | 0.776 (7,760 bp) | 70% - Primary driver |
+| **Price Alpha (Momentum)** | -0.002 (-20 bp) | 15% - Tail signal only |
+| **Combined Signal** | **0.667 (6,674 bp)** | **Total predictive power** |
+
+**Strategy Profile:**
+- **70% Funding Carry Arbitrage**: Short assets with high expected funding, long assets with negative funding
+- **15% Tail Momentum**: Price momentum emerges only in low-funding regimes (top decile)
+- **15% Diversification**: Risk reduction through beta-neutral construction
+
+This is fundamentally a **funding carry strategy** where momentum adds value primarily when funding is favorable.
 
 ## 🚀 Features
 
@@ -51,16 +66,16 @@ slipstream/
 │   ├── data_load.py             # API data fetcher
 │   ├── fetch_s3_historical.py   # S3 historical downloader
 │   ├── build_pca_factor.py      # PCA factor computation
+│   ├── find_optimal_horizon.py  # PCA timescale matching
+│   ├── find_optimal_H_alpha.py  # Alpha model H* search
+│   ├── find_optimal_H_funding.py # Funding model H* search
+│   ├── find_optimal_H_joint.py  # Joint optimization ✨ NEW
 │   ├── gradient_compute_signals.py # Gradient trend strength CLI ✨ NEW
 │   ├── gradient_run_backtest.py # Gradient backtest CLI ✨ NEW
 │   └── strategies/
 │       ├── run_backtest.py      # Multi-strategy backtest dispatcher ✨ NEW
 │       ├── gradient/            # Gradient-specific helpers (scripts + tooling)
 │       └── brawler/             # Brawler live-run scripts (coming online)
-├── legacy/                      # Legacy H* optimization code
-│   ├── scripts/                 # H* optimization and model training scripts
-│   ├── docs/                    # Legacy documentation
-│   └── src/                     # Legacy alpha and funding modules
 ├── notebooks/                   # Research & analysis
 ├── docs/                        # Documentation
 │   ├── DOCUMENTATION.md         # Consolidated documentation
@@ -141,10 +156,10 @@ python scripts/fetch_s3_historical.py --start 2023-10-01 --end 2025-03-27
 
 ```bash
 # Generate timescale-matched PCA factors
-python scripts/build_pca_factor.py --H 4 8 12 24 48 --K 30 --weight-method sqrt
+python scripts/find_optimal_horizon.py --H 4 8 12 24 48 --K 30 --weight-method sqrt
 
-# For legacy H* optimization models, see legacy scripts:
-# python legacy/scripts/find_optimal_H_joint.py --H 4 8 12 24 48 --n-bootstrap 1000
+# Train joint alpha + funding models
+python scripts/find_optimal_H_joint.py --H 4 8 12 24 48 --n-bootstrap 1000
 
 # View results
 cat data/features/joint_models/optimization_summary.json
@@ -227,8 +242,8 @@ print(f"Max Drawdown: {result.max_drawdown():.2%}")
 # 1. Fetch market data
 uv run hl-load --all --days 180
 
-# 2. Generate PCA factors
-python scripts/build_pca_factor.py --H 8 --K 30 --weight-method sqrt
+# 2. Generate PCA factors (timescale-matched)
+python scripts/find_optimal_horizon.py --H 8 --K 30 --weight-method sqrt
 
 # Output: data/features/pca_factor_H8_K30_sqrt.csv
 ```
@@ -236,8 +251,8 @@ python scripts/build_pca_factor.py --H 8 --K 30 --weight-method sqrt
 ### Model Training
 
 ```bash
-# For legacy H* optimization models (moved to legacy folder):
-# python legacy/scripts/find_optimal_H_joint.py --H 8 --n-bootstrap 1000
+# 3. Train joint models
+python scripts/find_optimal_H_joint.py --H 8 --n-bootstrap 1000
 
 # Output: data/features/joint_models/joint_model_H8.json
 ```

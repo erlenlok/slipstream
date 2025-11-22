@@ -1,0 +1,18 @@
+# Example configuration for Volume Generator Bot
+# Copy this file and adjust parameters for your volume generation needs
+
+# Volume generation parameters
+volume_generation:
+  trade_count: 42                    # Number of in-and-out trades to perform
+  trade_size_usd: 20.0              # USD amount for each trade
+  delay_between_trades: 1.5         # Delay between trades in seconds
+  symbol: "BTC"                     # Symbol to trade
+  slippage_tolerance_bps: 100       # Slippage tolerance in basis points (1%)
+  dry_run: false                    # Run in dry-run mode without placing real orders
+
+# Hyperliquid API configuration
+hyperliquid:
+  api_key: "${HYPERLIQUID_API_KEY}"  # Loaded from environment variable
+  api_secret: "${HYPERLIQUID_API_SECRET}"  # Loaded from environment variable
+  main_wallet: "${HYPERLIQUID_VOLUME_WALLET:-${HYPERLIQUID_MAIN_WALLET}}"  # Volume wallet with fallback to main wallet
+  base_url: "https://api.hyperliquid.xyz"

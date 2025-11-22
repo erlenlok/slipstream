@@ -170,13 +170,14 @@ def _resolve_main_wallet(config) -> str:
 
     Prefers environment variable override, falls back to config.api.main_wallet.
     """
-    main_wallet = os.getenv("HYPERLIQUID_MAIN_WALLET")
+    # Try gradient-specific wallet first, then fall back to main wallet for backward compatibility
+    main_wallet = os.getenv("HYPERLIQUID_GRADIENT_WALLET") or os.getenv("HYPERLIQUID_MAIN_WALLET")
     if not main_wallet:
         api_cfg = getattr(config, "api", {}) or {}
         main_wallet = api_cfg.get("main_wallet")
     if not main_wallet:
         raise ValueError(
-            "HYPERLIQUID_MAIN_WALLET environment variable (or api.main_wallet in config) must be set "
+            "HYPERLIQUID_GRADIENT_WALLET environment variable (or HYPERLIQUID_MAIN_WALLET, or api.main_wallet in config) must be set "
             "to fetch positions and open orders; this should point at the MAIN wallet, not the API vault."
         )
     return main_wallet
@@ -1434,7 +1435,7 @@ def monitor_fills_with_timeout(
     if not polling_addresses:
         raise ValueError(
             "Unable to determine address for open order monitoring. "
-            "Set HYPERLIQUID_MAIN_WALLET and HYPERLIQUID_API_KEY."
+            "Set HYPERLIQUID_GRADIENT_WALLET (or HYPERLIQUID_MAIN_WALLET) and HYPERLIQUID_API_KEY."
         )
 
     start_time = time.time()

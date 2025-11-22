@@ -37,7 +37,7 @@ hyperliquid_rest_url: "https://api.hyperliquid.xyz"
 state_snapshot_path: "logs/brawler_state_snapshot.json"
 hyperliquid_api_key: "${HYPERLIQUID_API_KEY}"
 hyperliquid_api_secret: "${HYPERLIQUID_API_SECRET}"
-hyperliquid_main_wallet: "${HYPERLIQUID_MAIN_WALLET}"
+hyperliquid_main_wallet: "${HYPERLIQUID_BRAWLER_WALLET:-${HYPERLIQUID_MAIN_WALLET}}"  # Brawler wallet with fallback to main wallet
 
 portfolio:
   max_gross_inventory: 0.5
