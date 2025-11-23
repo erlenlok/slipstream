@@ -27,18 +27,24 @@ from ..sensitivity import compute_log_returns
 
 def setup_logging(config):
     """Configure logging to file and console."""
-    log_dir = Path(config.log_dir)
-    log_dir.mkdir(parents=True, exist_ok=True)
-
-    log_file = log_dir / f"rebalance_{datetime.now().strftime('%Y%m%d')}.log"
+    try:
+        log_dir = Path(config.log_dir)
+        log_dir.mkdir(parents=True, exist_ok=True)
+        log_file = log_dir / f"rebalance_{datetime.now().strftime('%Y%m%d')}.log"
+        handlers = [
+            logging.FileHandler(log_file),
+            logging.StreamHandler(sys.stdout),
+        ]
+    except PermissionError:
+        # Fallback to console only if we can't access log directory
+        print(f"Warning: Cannot access log directory {config.log_dir}, using console only")
+        handlers = [logging.StreamHandler(sys.stdout)]
 
     logging.basicConfig(
         level=getattr(logging, config.log_level),
         format="%(asctime)s [%(levelname)s] %(message)s",
-        handlers=[
-            logging.FileHandler(log_file),
-            logging.StreamHandler(sys.stdout),
-        ],
+        handlers=handlers,
+        force=True  # This will override any existing basicConfig
     )
 
     return logging.getLogger(__name__)
@@ -57,6 +63,7 @@ def run_rebalance():
     6. Execute rebalance orders
     7. Log results
     """
+    logger = None
     try:
         # Load and validate configuration
         config = load_config()
@@ -311,7 +318,12 @@ def run_rebalance():
         return 0
 
     except Exception as e:
-        logger.error(f"FATAL ERROR during rebalance: {e}", exc_info=True)
+        if logger:
+            logger.error(f"FATAL ERROR during rebalance: {e}", exc_info=True)
+        else:
+            print(f"FATAL ERROR during rebalance: {e}")
+            import traceback
+            traceback.print_exc()
         # TODO: Send alert
         return 1
 

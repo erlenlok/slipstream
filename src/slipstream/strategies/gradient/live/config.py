@@ -20,11 +20,6 @@ class GradientConfig:
     lookback_spans: List[int]
     vol_span: int  # Legacy: for EWMA vol
 
-    # VAR-based risk parameters (new)
-    risk_method: str = "dollar_vol"  # "dollar_vol" (legacy) or "var" (new)
-    target_side_var: float = 0.02  # Target one-day VAR per side
-    var_lookback_days: int = 60  # Days for covariance estimation
-
     # Risk limits
     max_position_pct: float
     max_total_leverage: float
@@ -51,6 +46,11 @@ class GradientConfig:
 
     # Alerts
     alerts_enabled: bool
+
+    # VAR-based risk parameters (new) - defaults at end
+    risk_method: str = "dollar_vol"  # "dollar_vol" (legacy) or "var" (new)
+    target_side_var: float = 0.02  # Target one-day VAR per side
+    var_lookback_days: int = 60  # Days for covariance estimation
     telegram_token: str = ""
     telegram_chat_id: str = ""
 

@@ -14,7 +14,14 @@ class PerformanceTracker:
 
     def __init__(self, log_dir: str = "/var/log/gradient"):
         self.log_dir = Path(log_dir)
-        self.log_dir.mkdir(parents=True, exist_ok=True)
+        try:
+            self.log_dir.mkdir(parents=True, exist_ok=True)
+        except PermissionError:
+            # Use a temporary directory if we can't access the log directory
+            import tempfile
+            self.log_dir = Path(tempfile.mkdtemp(prefix="gradient_log_"))
+            print(f"Warning: Using temporary log directory {self.log_dir} due to permission issues")
+
         self.rebalance_log = self.log_dir / "rebalance_history.jsonl"
         self.positions_log = self.log_dir / "positions_history.jsonl"
         self.signals_log = self.log_dir / "signal_history.jsonl"
