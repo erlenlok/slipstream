@@ -19,14 +19,13 @@ from ..sensitivity import (
 from . import cache as cache_module
 
 # Tunable request controls to play nicely with Hyperliquid's rate limits.
-# Prior runs with higher concurrency still triggered 429s, so default to 2 and add
-# a minimum inter-request delay for the initial historical sweep.
-MAX_CONCURRENT_REQUESTS = 2
-MIN_CANDLE_REQUEST_INTERVAL_SECONDS = 0.25  # 4 requests/second aggregate
-MAX_REQUEST_ATTEMPTS = 6
-INITIAL_BACKOFF_SECONDS = 2.0  # Increased from 1.0 to be more conservative
-BACKOFF_FACTOR = 2.0
-BACKOFF_JITTER = 0.3  # Add ±30% jitter to prevent thundering herd
+# To avoid 429 errors, using conservative settings with more spacing between requests.
+MAX_CONCURRENT_REQUESTS = 1  # Reduced from 2 to be more gentle
+MIN_CANDLE_REQUEST_INTERVAL_SECONDS = 0.5  # Reduced to 2 requests/second aggregate (was 0.25)
+MAX_REQUEST_ATTEMPTS = 8  # Increased to handle temporary rate limits
+INITIAL_BACKOFF_SECONDS = 3.0  # Increased to be more conservative (was 2.0)
+BACKOFF_FACTOR = 2.5  # Increased to back off more aggressively (was 2.0)
+BACKOFF_JITTER = 0.4  # Increased jitter to prevent thundering herd (was 0.3)
 
 
 async def fetch_all_perp_markets(endpoint: str) -> List[str]:

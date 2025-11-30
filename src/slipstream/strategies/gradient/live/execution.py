@@ -29,7 +29,7 @@ class HyperliquidContext:
     info: Any
     exchange: Optional[Any]
     asset_meta: Dict[str, AssetMeta]
-    account_address: Optional[str] = None
+    vault_address: Optional[str] = None  # Changed to match Exchange constructor
     meta_timestamp: Dict[str, float] = field(default_factory=dict)
 
 
@@ -369,20 +369,20 @@ def _combine_slippage_stats(stats_a: Dict[str, Any], stats_b: Dict[str, Any]) ->
 
 def _enrich_orders_with_actual_fills(
     info_client,
-    account_address: Optional[str],
+    vault_address: Optional[str],
     filled_stage1: List[Dict[str, Any]],
     stage2_orders: List[Dict[str, Any]],
     start_timestamp: float,
 ) -> None:
     """Fetch actual fills and update order records with executed pricing."""
-    if not account_address:
+    if not vault_address:
         return
 
     try:
         start_ms = int(max(0, (start_timestamp - 120) * 1000))  # include 2-minute buffer
         end_ms = int(time.time() * 1000) + 1000
         fills = info_client.user_fills_by_time(
-            account_address,
+            vault_address,
             start_ms,
             end_ms,
             aggregate_by_time=True,
@@ -530,7 +530,7 @@ def _prepare_hyperliquid_context(config) -> HyperliquidContext:
     asset_meta = _build_asset_meta(info_client, meta_payload, asset_ctxs)
 
     exchange_client = None
-    account_address: Optional[str] = None
+    vault_address: Optional[str] = None
     if not config.dry_run:
         api_secret = os.getenv("HYPERLIQUID_API_SECRET") or config.api_secret
         api_key = os.getenv("HYPERLIQUID_API_KEY") or config.api_key
@@ -549,13 +549,23 @@ def _prepare_hyperliquid_context(config) -> HyperliquidContext:
                 "HYPERLIQUID_API_KEY does not match address derived from secret"
             )
 
+        # Determine the account address for trading (target wallet)
+        # Use gradient wallet if available, otherwise default to main wallet
+        # This controls which account's balances/orders the exchange operates on
+        target_wallet = os.getenv("HYPERLIQUID_GRADIENT_WALLET") or os.getenv("HYPERLIQUID_MAIN_WALLET")
+        if not target_wallet:
+            raise ValueError(
+                "Either HYPERLIQUID_GRADIENT_WALLET or HYPERLIQUID_MAIN_WALLET environment variable must be set "
+                "to specify the target wallet for trade execution."
+            )
+
         exchange_client = Exchange(
             wallet=wallet,
             base_url=base_url,
             meta=meta_payload,
-            account_address=wallet.address,
+            vault_address=target_wallet,  # Direct trades to the target wallet (subaccount)
         )
-        account_address = wallet.address
+        vault_address = target_wallet
 
     now = time.time()
 
@@ -563,7 +573,7 @@ def _prepare_hyperliquid_context(config) -> HyperliquidContext:
         info=info_client,
         exchange=exchange_client,
         asset_meta=asset_meta,
-        account_address=account_address,
+        vault_address=vault_address,
         meta_timestamp={name: now for name in asset_meta},
     )
 
@@ -778,10 +788,10 @@ def _extract_order_id(response: Any) -> str:
     return ""
 
 
-def _collect_open_order_ids(info_client, account_address: str) -> List[str]:
+def _collect_open_order_ids(info_client, vault_address: str) -> List[str]:
     """Fetch the current set of open order ids for an account."""
     try:
-        open_orders = info_client.frontend_open_orders(account_address)
+        open_orders = info_client.frontend_open_orders(vault_address)
     except Exception:
         return []
 
@@ -890,7 +900,33 @@ def execute_rebalance_with_stages(
     Stage 2 (60+ min): Sweep unfilled with market orders
     """
     min_threshold = config.execution.get("min_order_size_usd", 2.0)
+
+    # Add detailed logging to understand the filtering
+    print(f"Target positions: {len(target_positions)} assets")
+    print(f"Current positions: {len(current_positions)} assets")
+    print(f"Minimum execution threshold: ${min_threshold}")
+
     deltas = calculate_deltas(target_positions, current_positions, min_threshold)
+
+    # Log stats about why positions are filtered
+    all_assets = set(target_positions.keys()) | set(current_positions.keys())
+    total_deltas = {}
+    for asset in all_assets:
+        target_size = target_positions.get(asset, 0.0)
+        current_size = current_positions.get(asset, 0.0)
+        delta = target_size - current_size
+        total_deltas[asset] = delta
+
+    below_threshold = {asset: delta for asset, delta in total_deltas.items() if abs(delta) < min_threshold}
+    above_threshold = {asset: delta for asset, delta in total_deltas.items() if abs(delta) >= min_threshold}
+
+    print(f"Total potential deltas: {len(total_deltas)}")
+    print(f"Deltas below threshold (<${min_threshold}): {len(below_threshold)}")
+    print(f"Deltas above threshold (≥${min_threshold}): {len(above_threshold)}")
+
+    if len(below_threshold) > 0:
+        below_sample = dict(list(below_threshold.items())[:5])
+        print(f"Sample below threshold: {below_sample}")
 
     if not deltas:
         print("No rebalancing needed (all positions within threshold)")
@@ -1151,7 +1187,7 @@ def execute_rebalance_with_stages(
     if not config.dry_run:
         _enrich_orders_with_actual_fills(
             context.info,
-            context.account_address,
+            context.vault_address,
             filled,
             stage2_orders,
             stage1_start,

@@ -5,12 +5,36 @@ Main entry point for Gradient strategy rebalancing.
 This script is called by cron every 4 hours to rebalance the portfolio.
 """
 
+import os
 import sys
 import logging
 import math
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List
+
+# Load environment variables from .env files
+try:
+    from dotenv import load_dotenv
+    # Load the gradient-specific env file first, then generic one
+    env_file = Path(__file__).parent.parent.parent.parent.parent / ".env.gradient"
+    if env_file.exists():
+        load_dotenv(env_file, override=False)
+    else:
+        # Try alternative locations
+        env_file = Path.cwd() / ".env.gradient"
+        if env_file.exists():
+            load_dotenv(env_file, override=False)
+
+    # Also try loading generic .env file if it exists
+    generic_env = Path(__file__).parent.parent.parent.parent.parent / ".env"
+    if generic_env.exists():
+        load_dotenv(generic_env, override=False)
+
+except ImportError:
+    # If python-dotenv is not installed, try to load manually
+    # or continue without it (rely on system environment)
+    pass
 
 from .config import load_config, validate_config
 from .data import fetch_live_data, compute_live_signals, validate_market_data, validate_signals

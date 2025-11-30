@@ -28,7 +28,7 @@
 set -euo pipefail
 
 # Configuration
-PROJECT_DIR="/root/slipstream"
+PROJECT_DIR="/home/ubuntu/slipstream"
 VENV_DIR="$PROJECT_DIR/.venv"
 LOG_DIR="/var/log/gradient"
 

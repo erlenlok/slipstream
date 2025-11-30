@@ -30,7 +30,8 @@ def select_top_bottom_assets(
     if top_n <= 0:
         raise ValueError("top_n must be positive")
 
-    bottom_n = bottom_n or top_n
+    if bottom_n is None:
+        bottom_n = top_n
     if bottom_n <= 0:
         raise ValueError("bottom_n must be positive")
 

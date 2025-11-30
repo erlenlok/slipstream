@@ -33,12 +33,12 @@ def to_hour(dt_ms: int) -> datetime:
 
 # ---------- http ----------
 RETRYABLE_STATUS = {429, 500, 502, 503, 504}
-REQUEST_PAUSE_SECONDS = 0.5  # Doubled from 0.25 to be more API-friendly
+REQUEST_PAUSE_SECONDS = 1.0  # Doubled from 0.5 to 1.0 to be twice as conservative
 
 
-async def _post_json(client: httpx.AsyncClient, payload: dict[str, Any], *, max_attempts: int = 5) -> Any:
+async def _post_json(client: httpx.AsyncClient, payload: dict[str, Any], *, max_attempts: int = 8) -> Any:
     """POST helper with gentle retry & throttling for rate limits."""
-    delay = 1.0  # Start with 1 second delay for retries (doubled from 0.5)
+    delay = 2.0  # Start with 2 seconds delay for retries (doubled from 1.0)
     for attempt in range(max_attempts):
         try:
             response = await client.post(API_URL, json=payload)
@@ -50,14 +50,14 @@ async def _post_json(client: httpx.AsyncClient, payload: dict[str, Any], *, max_
             if status in RETRYABLE_STATUS and attempt + 1 < max_attempts:
                 print(f"  Retrying after {status} error (attempt {attempt + 1}/{max_attempts}), waiting {delay:.1f}s...")
                 await asyncio.sleep(delay)
-                delay *= 2
+                delay *= 2.5  # Increased from 2 to 2.5 for more conservative backoff
                 continue
             raise
         except httpx.RequestError:
             if attempt + 1 < max_attempts:
                 print(f"  Retrying after request error (attempt {attempt + 1}/{max_attempts}), waiting {delay:.1f}s...")
                 await asyncio.sleep(delay)
-                delay *= 2
+                delay *= 2.5  # Increased from 2 to 2.5 for more conservative backoff
                 continue
             raise
 
@@ -152,21 +152,35 @@ async def fetch_candles(
     """Paginate candles in chunks to stay under ~5k-candle caps.
 
     Args:
-        interval: "1h" or "4h" (API supports 1m, 5m, 15m, 1h, 4h, 1d)
+        interval: Supported intervals: "1m", "5m", "15m", "1h", "4h", "1d"
     """
-    # Adjust chunk size based on interval to stay under 5000 candle limit
-    if interval == "4h":
-        chunk_days = 500  # 500*24/4=3000 < 5000
+    # Calculate maximum span to stay under 5000 candles per request
+    if interval == "1m":
+        chunk_span = timedelta(minutes=5000)  # 5000 candles * 1 minute = 5000 minutes
+    elif interval == "5m":
+        chunk_span = timedelta(minutes=5000 * 5)  # 5000 candles * 5 minutes = 25000 minutes
+    elif interval == "15m":
+        chunk_span = timedelta(minutes=5000 * 15)  # 5000 candles * 15 minutes = 75000 minutes
     elif interval == "1h":
-        chunk_days = 120  # 120*24=2880 < 5000
+        chunk_span = timedelta(hours=5000)  # 5000 candles * 1 hour = 5000 hours
+    elif interval == "4h":
+        chunk_span = timedelta(hours=5000 * 4)  # 5000 candles * 4 hours = 20000 hours
+    elif interval == "1d":
+        chunk_span = timedelta(days=5000)  # 5000 candles * 1 day = 5000 days
     else:
-        chunk_days = 120  # Conservative default
+        # Conservative default for any unexpected interval
+        chunk_span = timedelta(hours=120)  # 5 days worth of 1h candles as fallback
 
     rows: list[dict[str, Any]] = []
     cur = start
 
     while cur < end:
-        chunk_end = min(cur + timedelta(days=chunk_days), end)
+        chunk_end = min(cur + chunk_span, end)
+
+        # Ensure we have at least a small range to avoid errors
+        if chunk_end <= cur:
+            break
+
         payload = {
             "type": "candleSnapshot",
             "req": {
@@ -198,7 +212,11 @@ async def fetch_candles(
             ts=lambda x: x["ts"].astype("int64"),
         )
     )
-    out["datetime"] = out["ts"].map(to_hour)
+
+    # Convert timestamp to appropriate datetime based on the interval
+    # For all intervals, we use the exact timestamp from the API
+    out["datetime"] = pd.to_datetime(out["ts"], unit='ms', utc=True)
+
     out = out.drop_duplicates("datetime").set_index("datetime").sort_index()
     return out[["open", "high", "low", "close", "volume"]]
 
@@ -321,30 +339,37 @@ async def build_datasets(
     interval: str = "4h",
 ) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
     """Fetch candles+funding, compute returns, align, and write CSVs to market_data/."""
-    candles, funding = await asyncio.gather(
-        fetch_candles(client, coin, start, end, interval),
-        fetch_funding_hourly(client, coin, start, end),
-    )
+    # Run requests sequentially rather than in parallel to be more API-friendly
+    # This is twice as conservative as running them concurrently
+    candles = await fetch_candles(client, coin, start, end, interval)
+    await asyncio.sleep(REQUEST_PAUSE_SECONDS)  # Additional pause between requests
+    funding = await fetch_funding_hourly(client, coin, start, end)
     rets = compute_log_returns(candles)
 
-    # Resample both to common grid aligned to epoch (UTC midnight)
-    # This ensures candles and funding are on the same timestamps
-    freq = interval if interval in ["1h", "4h"] else "4h"
+    # For intervals other than 1h and 4h, we need to decide how to align funding
+    # Since funding rates are typically hourly, we'll resample to match the candle interval
+    if interval in ["1m", "5m", "15m"]:
+        # For sub-hourly intervals, we'll keep the funding data as hourly
+        # because funding rates don't change within the hour
+        candles_resampled = candles  # Don't resample candles for sub-hourly
+        rets_resampled = compute_log_returns(candles_resampled)
+        # Resample funding to hourly since that's how rates are provided
+        funding_resampled = funding.resample('1h', origin='epoch', offset='0h').mean().dropna(how='all')
+    else:
+        # For hourly and longer intervals, align both to the candle interval
+        candles_resampled = candles.resample(interval, origin='epoch', offset='0h').agg({
+            'open': 'first',
+            'high': 'max',
+            'low': 'min',
+            'close': 'last',
+            'volume': 'sum'
+        }).dropna(how='all')
 
-    # Resample candles (use last for OHLCV)
-    candles_resampled = candles.resample(freq, origin='epoch', offset='0h').agg({
-        'open': 'first',
-        'high': 'max',
-        'low': 'min',
-        'close': 'last',
-        'volume': 'sum'
-    }).dropna(how='all')
+        # Recompute returns from resampled candles
+        rets_resampled = compute_log_returns(candles_resampled)
 
-    # Recompute returns from resampled candles
-    rets_resampled = compute_log_returns(candles_resampled)
-
-    # Resample funding (average)
-    funding_resampled = funding.resample(freq, origin='epoch', offset='0h').mean().dropna(how='all')
+        # Resample funding (average) to match the candle interval
+        funding_resampled = funding.resample(interval, origin='epoch', offset='0h').mean().dropna(how='all')
 
     # Use the resampled data's index for alignment (already grid-aligned)
     # This ensures merged data matches candles/funding timestamps
@@ -354,13 +379,13 @@ async def build_datasets(
     # CRITICAL: Merge with existing data to prevent truncation
     # This ensures we NEVER lose historical data when updating
     import os
-    os.makedirs(f"{out_prefix}/market_data", exist_ok=True)
+    os.makedirs(f"{out_prefix}/market_data/{interval}", exist_ok=True)
 
-    candles_path = f"{out_prefix}/market_data/{coin}_candles_{freq}.csv"
-    funding_path = f"{out_prefix}/market_data/{coin}_funding_{freq}.csv"
-    merged_path = f"{out_prefix}/market_data/{coin}_merged_{freq}.csv"
+    candles_path = f"{out_prefix}/market_data/{interval}/{coin}_candles_{interval}.csv"
+    funding_path = f"{out_prefix}/market_data/{interval}/{coin}_funding_{interval}.csv"
+    merged_path = f"{out_prefix}/market_data/{interval}/{coin}_merged_{interval}.csv"
 
-    print(f"  Saving {coin}:")
+    print(f"  Saving {coin} (interval: {interval}):")
     candles_final = _merge_with_existing(candles_resampled, candles_path)
     funding_final = _merge_with_existing(funding_resampled, funding_path)
     aligned_final = _merge_with_existing(aligned, merged_path)
@@ -383,10 +408,9 @@ async def build_for_universe(
     """Fetch & write datasets for all live markets (optionally filter by dex name)."""
     # CRITICAL PRE-FLIGHT CHECK: Warn if fetch window might not cover existing data
     import os
-    freq = interval if interval in ["1h", "4h"] else "4h"
     sample_files = [
-        f"{out_prefix}/market_data/BTC_candles_{freq}.csv",
-        f"{out_prefix}/market_data/ETH_candles_{freq}.csv",
+        f"{out_prefix}/market_data/{interval}/BTC_candles_{interval}.csv",
+        f"{out_prefix}/market_data/{interval}/ETH_candles_{interval}.csv",
     ]
 
     for sample_file in sample_files:
@@ -432,7 +456,7 @@ async def build_for_universe(
             print(f"- {dex}: {coin}")
             try:
                 await build_datasets(client, coin=coin, start=start, end=end, out_prefix=out_prefix, interval=interval)
-                await asyncio.sleep(REQUEST_PAUSE_SECONDS)
+                await asyncio.sleep(REQUEST_PAUSE_SECONDS * 2)  # Double the pause between assets for more conservatism
             except Exception as exc:  # noqa: BLE001
                 print(f"  Warning: failed for {coin} ({dex}): {exc}")
 
@@ -443,7 +467,7 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--coin", type=str, default="", help="Single market symbol (e.g., BTC). If empty and --all not set, prints markets.")
     p.add_argument("--all", action="store_true", help="Fetch for all live perp markets.")
     p.add_argument("--dex", type=str, default=None, help="Filter to a specific dex namespace (use with --all).")
-    p.add_argument("--interval", type=str, default="4h", choices=["1h", "4h"], help="Candle interval: 4h (default) or 1h.")
+    p.add_argument("--interval", type=str, default="4h", choices=["1m", "5m", "15m", "1h", "4h", "1d"], help="Candle interval: 1m, 5m, 15m, 1h, 4h, 1d (default: 4h).")
     p.add_argument("--days", type=int, default=180, help="Lookback window in days (default: 180).")
     p.add_argument("--start", type=str, default=None, help="ISO start (UTC). Overrides --days if set.")
     p.add_argument("--end", type=str, default=None, help="ISO end (UTC). Defaults to now.")

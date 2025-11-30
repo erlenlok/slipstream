@@ -311,7 +311,7 @@ class HyperliquidExecutionClient:
         self.exchange = Exchange(
             wallet=wallet,
             base_url=base_url,
-            account_address=wallet.address,
+            vault_address=wallet.address,
         )
         self.base_url = base_url
         self._lock = asyncio.Lock()

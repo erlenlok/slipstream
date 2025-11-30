@@ -58,52 +58,243 @@ def construct_target_portfolio(
     )
 
     # Convert signals to format expected by construct_gradient_portfolio
-    # Need: trend_strength (wide) and log_returns (wide)
+    # Need: trend_strength (wide) and log_returns (wide) with matching indices
 
-    # Create single-row wide DataFrames for current rebalance
-    trend_strength_wide = pd.DataFrame(
-        [liquid.set_index('asset')['momentum_score'].to_dict()],
-        index=[pd.Timestamp.now()]
+    # Get the timestamp from the signals DataFrame to ensure alignment
+    if 'signal_timestamp' in signals.columns and not signals.empty:
+        signal_timestamp = signals['signal_timestamp'].iloc[0]
+    else:
+        # Fallback: use the most recent timestamp from log_returns
+        signal_timestamp = log_returns.index[-1]
+
+    # For live rebalancing, we need to use historical log_returns data to calculate risk metrics,
+    # but only current signals for asset selection. To maximize historical data per asset,
+    # we should preserve as much history as each asset has individually.
+
+    # Get historical data up to (and including) the signal timestamp for risk calculations
+    historical_log_returns = log_returns[log_returns.index <= signal_timestamp]
+
+    # Get only assets that are in both the liquid universe AND have historical data
+    liquid_assets = set(liquid['asset'])
+    available_assets = set(historical_log_returns.columns)
+    common_assets = list(liquid_assets & available_assets)
+
+    # Focus on liquid assets that passed the universe filter
+    liquid_assets_set = set(liquid[liquid['include_in_universe']]['asset'])
+    final_assets = list(liquid_assets_set & set(historical_log_returns.columns))
+
+    if not final_assets:
+        print("  No assets available for portfolio construction - all liquid assets missing historical data")
+        return {}
+
+    # Select only the liquid assets that have historical data
+    historical_log_returns = historical_log_returns[final_assets]
+
+    # Create single-row trend strength for signal calculation (current moment only)
+    liquid_filtered = liquid[liquid['asset'].isin(final_assets)].copy()
+    current_signals_dict = liquid_filtered.set_index('asset')['momentum_score'].to_dict()
+
+    # For risk calculations, we want to preserve maximum history per asset
+    # Instead of dropping NaN values (which removes time periods), we should handle them appropriately
+    # The log_returns may have NaN for different assets at different times due to different start dates
+    # We should forward-fill within each asset column but not across time periods
+
+    # Fill any NaN values that are due to different start dates for different assets
+    historical_log_returns = historical_log_returns.ffill().fillna(0.0)  # Use 0.0 for returns where no data exists
+
+    # Ensure we have sufficient data for risk calculations by checking minimum history required
+    min_required_periods = config.var_lookback_days * 6  # 6 periods per day for 4h data
+    actual_periods = len(historical_log_returns)
+
+    print(f"    - Original log returns shape: {log_returns.shape}")
+    print(f"    - Selected liquid assets with data: {len(final_assets)}")
+    print(f"    - Historical log returns shape: {historical_log_returns.shape}")
+    print(f"    - Available historical periods: {actual_periods}")
+    print(f"    - Required lookback for VAR: {config.var_lookback_days} days (~{min_required_periods} periods)")
+
+    if actual_periods < min_required_periods:
+        print(f"    ⚠️  Insufficient historical data for VAR calculation ({actual_periods} < {min_required_periods})")
+        print(f"    ⚠️  VAR method may not perform optimally with limited history")
+
+    # Create trend strength with same index as historical data, filled with current signal values
+    # This aligns the current signals with historical data for risk calculations
+    # Create a DataFrame with the same index as historical_log_returns but with current signal values
+    trend_strength_for_calc = pd.DataFrame(
+        index=historical_log_returns.index,
+        columns=historical_log_returns.columns,
+        data=0.0  # Initialize with zeros
     )
 
-    # Ensure log_returns has same columns as trend_strength
-    # Use only columns that exist in both
-    common_assets = list(set(trend_strength_wide.columns) & set(log_returns.columns))
-    trend_strength_wide = trend_strength_wide[common_assets]
-    log_returns_aligned = log_returns[common_assets]
+    # Fill in the current signal values for all timestamps (this is how construct_gradient_portfolio expects it)
+    for asset, signal_value in current_signals_dict.items():
+        if asset in trend_strength_for_calc.columns:
+            trend_strength_for_calc[asset] = signal_value  # Fill entire column with current signal value
+
+    print(f"    - Trend strength for calculation shape: {trend_strength_for_calc.shape}")
+
+    # Use the properly aligned DataFrames for portfolio construction
+    trend_strength_wide = trend_strength_for_calc
+    log_returns_aligned = historical_log_returns
 
     # Call unified portfolio construction
-    if config.risk_method == "var":
-        # Use VAR-based allocation
-        print(f"  Using VAR-based risk balancing (target: {config.target_side_var*100:.1f}% per side)")
-        weights_df = construct_gradient_portfolio(
-            trend_strength=trend_strength_wide,
-            log_returns=log_returns_aligned,
-            top_n=n_select,
-            bottom_n=n_select,
-            risk_method="var",
-            target_side_var=config.target_side_var,
-            var_lookback_days=config.var_lookback_days,
-        )
-    else:
-        # Use legacy dollar-vol allocation
-        print(f"  Using legacy dollar-vol balancing (scheme: {config.weight_scheme})")
-        # Map weight_scheme to equivalent vol_span usage
-        # inverse_vol uses volatility, equal doesn't
-        target_dollar_vol = 1.0  # Normalized, will scale later
-        weights_df = construct_gradient_portfolio(
-            trend_strength=trend_strength_wide,
-            log_returns=log_returns_aligned,
-            top_n=n_select,
-            bottom_n=n_select,
-            risk_method="dollar_vol",
-            target_side_dollar_vol=target_dollar_vol,
-            vol_span=config.vol_span,
-        )
+    try:
+        if config.risk_method == "var":
+            # Use VAR-based allocation
+            print(f"  Using VAR-based risk balancing (target: {config.target_side_var*100:.1f}% per side)")
+            print(f"    - Trend strength shape: {trend_strength_wide.shape}")
+            print(f"    - Log returns shape: {log_returns_aligned.shape}")
+            print(f"    - Top/Bottom: {n_select} each")
+            print(f"    - VAR lookback days: {config.var_lookback_days}")
 
-    # Extract weights from last row (only row)
-    weights_series = weights_df.iloc[-1]
-    weights_dict = weights_series[weights_series != 0].to_dict()
+            weights_df = construct_gradient_portfolio(
+                trend_strength=trend_strength_wide,
+                log_returns=log_returns_aligned,
+                top_n=n_select,
+                bottom_n=n_select,
+                risk_method="var",
+                target_side_var=config.target_side_var,
+                var_lookback_days=config.var_lookback_days,
+            )
+        else:
+            # Use legacy dollar-vol allocation
+            print(f"  Using legacy dollar-vol balancing (scheme: {config.weight_scheme})")
+            print(f"    - Trend strength shape: {trend_strength_wide.shape}")
+            print(f"    - Log returns shape: {log_returns_aligned.shape}")
+            print(f"    - Top/Bottom: {n_select} each")
+            print(f"    - Vol span: {config.vol_span}")
+
+            # Map weight_scheme to equivalent vol_span usage
+            # inverse_vol uses volatility, equal doesn't
+            target_dollar_vol = 1.0  # Normalized, will scale later
+            weights_df = construct_gradient_portfolio(
+                trend_strength=trend_strength_wide,
+                log_returns=log_returns_aligned,
+                top_n=n_select,
+                bottom_n=n_select,
+                risk_method="dollar_vol",
+                target_side_dollar_vol=target_dollar_vol,
+                vol_span=config.vol_span,
+            )
+
+        # Extract weights from last row (only row)
+        weights_series = weights_df.iloc[-1]
+        weights_dict = weights_series[weights_series != 0].to_dict()
+
+        # Debug: Check if weights are all zero
+        if weights_dict:
+            non_zero_count = len(weights_dict)
+            total_assets = len(weights_series)
+            print(f"    - Generated positions for {non_zero_count}/{total_assets} assets")
+            if non_zero_count < total_assets:
+                zero_weight_count = total_assets - non_zero_count
+                print(f"    - {zero_weight_count} assets had zero weights")
+
+            # Add position size statistics
+            position_sizes = [abs(pos) for pos in weights_dict.values()]
+            avg_position_size = sum(position_sizes) / len(position_sizes) if position_sizes else 0
+            max_position_size = max(position_sizes) if position_sizes else 0
+            min_position_size = min(position_sizes) if position_sizes else 0
+
+            print(f"    - Position size stats: avg=${avg_position_size:.2f}, min=${min_position_size:.2f}, max=${max_position_size:.2f}")
+
+            # Sample of positions for debugging
+            sample_positions = dict(list(weights_dict.items())[:5])
+            print(f"    - Sample target positions: {sample_positions}")
+        else:
+            print(f"    - All weights were zero")
+
+    except Exception as e:
+        print(f"  Portfolio construction failed: {e}")
+        import traceback
+        print(f"  Full traceback: {traceback.format_exc()}")
+        weights_dict = {}
+
+    # If no positions were created (e.g., due to insufficient history or other issues),
+    # fall back to simple equal weighting
+    if not weights_dict:
+        print(f"  No positions created - starting diagnostic analysis...")
+
+        # Diagnostic: Check if we have sufficient data for VAR method
+        if config.risk_method == "var":
+            print("  VAR method diagnostics:")
+            print(f"    - Required lookback days: {config.var_lookback_days}")
+            print(f"    - Log returns date range: {log_returns_aligned.index.min()} to {log_returns_aligned.index.max()}")
+            date_range = log_returns_aligned.index.max() - log_returns_aligned.index.min()
+            print(f"    - Available date range: {date_range.days} days")
+            print(f"    - Number of assets in lookback: {log_returns_aligned.shape[1]}")
+            print(f"    - Number of time periods in lookback: {log_returns_aligned.shape[0]}")
+
+            if log_returns_aligned.shape[0] < config.var_lookback_days:
+                print(f"    - INSUFFICIENT DATA: Only {log_returns_aligned.shape[0]} periods, need {config.var_lookback_days}")
+
+            # Check for NaN values in log returns
+            nan_count = log_returns_aligned.isna().sum().sum()
+            if nan_count > 0:
+                print(f"    - Found {nan_count} NaN values in log returns that might cause VAR calc to fail")
+
+            # Try dollar-vol as fallback
+            print("  Attempting dollar-vol fallback method...")
+            try:
+                weights_df = construct_gradient_portfolio(
+                    trend_strength=trend_strength_wide,
+                    log_returns=log_returns_aligned,
+                    top_n=n_select,
+                    bottom_n=n_select,
+                    risk_method="dollar_vol",
+                    target_side_dollar_vol=1.0,  # Normalized, will scale later
+                    vol_span=config.vol_span,
+                )
+                weights_series = weights_df.iloc[-1]
+                weights_dict = weights_series[weights_series != 0].to_dict()
+
+                if weights_dict:
+                    print("  ✓ Dollar-vol fallback successful")
+                else:
+                    print("  ✗ Dollar-vol also resulted in zero positions")
+            except Exception as e:
+                print(f"  ✗ Dollar-vol fallback failed: {e}")
+                import traceback
+                print(f"    Full traceback: {traceback.format_exc()}")
+
+        # If both methods failed, use simple equal weighting
+        if not weights_dict:
+            print("  Using equal-weighting fallback...")
+            # Fallback: create simple equal-weighted positions based on top/bottom assets
+            weights_dict = {}
+
+            # Get top and bottom assets based on momentum scores
+            liquid_sorted = liquid.sort_values("momentum_score", ascending=False)
+            top_assets = liquid_sorted.head(n_select)["asset"].tolist()
+            bottom_assets = liquid_sorted.tail(n_select)["asset"].tolist()  # Use actual bottom assets based on ranking
+
+            # Equal weight within each side
+            if top_assets:
+                long_weight = 1.0 / len(top_assets)  # Equal weight for longs
+                for asset in top_assets:
+                    weights_dict[asset] = long_weight
+
+            if bottom_assets:
+                short_weight = -1.0 / len(bottom_assets)  # Equal weight for shorts
+                for asset in bottom_assets:
+                    weights_dict[asset] = short_weight
+
+            # If we still don't have positions, use the top and bottom assets from the sorted list
+            if not weights_dict and len(liquid_sorted) >= 2:
+                # At least create positions for the top and bottom assets
+                if len(top_assets) == 0 and len(liquid_sorted) > 0:
+                    weights_dict[liquid_sorted.iloc[0]["asset"]] = 1.0  # Top asset long
+                if len(bottom_assets) == 0 and len(liquid_sorted) > 1:
+                    weights_dict[liquid_sorted.iloc[-1]["asset"]] = -1.0  # Bottom asset short
+
+            # Final check
+            if not weights_dict:
+                print("  ❌ No positions could be created even with equal-weighting fallback!")
+                print(f"    - Total liquid assets: {len(liquid_sorted)}")
+                print(f"    - Selected n: {n_select}")
+                print(f"    - Top assets: {top_assets}")
+                print(f"    - Bottom assets: {bottom_assets}")
+            else:
+                print(f"  ✓ Equal-weighting fallback successful: {len(weights_dict)} positions")
 
     # Scale to dollar amounts
     # Each side gets 100% of capital (gross exposure = 2x)
@@ -203,8 +394,11 @@ def validate_target_portfolio(positions: Dict[str, float], config) -> None:
     if len(positions) == 0:
         raise ValueError("Target portfolio is empty")
 
-    # Check for NaN or inf
+    # Check for NaN or inf, and ensure type is numeric
     for asset, size in positions.items():
+        # Check if position is a number first
+        if not isinstance(size, (int, float)):
+            raise ValueError(f"Invalid position size for {asset}: {size} (not a number)")
         if not np.isfinite(size):
             raise ValueError(f"Invalid position size for {asset}: {size}")
 

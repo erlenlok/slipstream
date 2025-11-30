@@ -59,7 +59,7 @@ class VolumeGeneratorBot:
             wallet=self.wallet,
             base_url=self.config.base_url,
             meta=meta,
-            account_address=self.wallet.address,
+            vault_address=self.wallet.address,
         )
 
         self._initialized = True
