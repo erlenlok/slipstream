@@ -21,6 +21,7 @@ from .connectors import (
     HyperliquidQuoteStream,
     HyperliquidUserFillStream,
 )
+from .discovery import DiscoveryEngine
 from .feeds import CexQuote, FillEvent, LocalQuote
 from .inventory import InventoryProvider
 from .persistence import FileStatePersistence, StatePersistence
@@ -102,6 +103,7 @@ class BrawlerEngine:
             except Exception as exc:  # pragma: no cover - surfacing to logs
                 logger.error("Failed to restore state snapshot: %s", exc, exc_info=exc)
         self.portfolio = PortfolioController(config.portfolio)
+        self.discovery = DiscoveryEngine(config)
         self._last_cancel_ts: Dict[str, float] = {}
 
     async def start(self) -> None:
@@ -111,11 +113,13 @@ class BrawlerEngine:
         self.hyperliquid_stream.start()
         if self.fill_stream:
             self.fill_stream.start()
+        self.discovery.start()
 
         self._tasks = [
             asyncio.create_task(self._consume_cex_quotes(), name="brawler-cex-quotes"),
             asyncio.create_task(self._consume_local_quotes(), name="brawler-local-quotes"),
             asyncio.create_task(self._quote_loop(), name="brawler-quote-loop"),
+            asyncio.create_task(self._log_status_summary(), name="brawler-status-log"),
         ]
         if self.fill_stream:
             self._tasks.append(asyncio.create_task(self._consume_fills(), name="brawler-fills"))
@@ -126,11 +130,39 @@ class BrawlerEngine:
         await self.hyperliquid_stream.stop()
         if self.fill_stream:
             await self.fill_stream.stop()
+        await self.discovery.stop()
         for task in self._tasks:
             task.cancel()
             with contextlib.suppress(asyncio.CancelledError):
                 await task
         self._persist_state()
+
+    async def _log_status_summary(self) -> None:
+        """Periodically log a summary of the engine's state."""
+        interval = 60.0
+        while not self._stop.is_set():
+            await asyncio.sleep(interval)
+            
+            lines = ["\n📊 Brawler Status Summary"]
+            for symbol, state in self.states.items():
+                cex_mid = state.cex_mid_window[-1] if state.cex_mid_window else 0.0
+                local_mid = (
+                    (state.active_bid.price + state.active_ask.price) / 2.0 
+                    if state.active_bid and state.active_ask 
+                    else state.last_mid_price
+                )
+                
+                status = "ACTIVE"
+                if state.suspended_reason:
+                    status = f"SUSPENDED ({state.suspended_reason})"
+                
+                lines.append(
+                    f"  {symbol:<6} | {status:<20} | "
+                    f"CEX: {cex_mid:.4f} | Local: {local_mid:.4f} | "
+                    f"Basis: {state.last_basis:.4f} | Sigma: {state.sigma:.6f} | "
+                    f"N: {len(state.cex_mid_window)} | Inv: {state.inventory:+.4f}"
+                )
+            logger.info("\n".join(lines))
 
     async def _consume_cex_quotes(self) -> None:
         from collections import deque
@@ -154,7 +186,7 @@ class BrawlerEngine:
             if not cfg:
                 continue
             state = self.states[quote.symbol]
-            state.push_local_mid(quote.ts)
+            state.push_local_mid(quote.mid, quote.ts)
             cex_cfg = self._config_for_cex_symbol(cfg.cex_symbol.upper())
             if cex_cfg is None:
                 continue
@@ -180,19 +212,26 @@ class BrawlerEngine:
         interval = max(0.1, self.config.risk.tick_interval_ms / 1000.0)
         while not self._stop.is_set():
             start = time.time()
-            if self.portfolio:
-                self.portfolio.update_metrics(self.states)
-            await self._update_quotes()
+            try:
+                if self.portfolio:
+                    self.portfolio.update_metrics(self.states)
+                await self._update_quotes()
+            except Exception as exc:
+                logger.error("Error in quote loop: %s", exc, exc_info=exc)
+            
             elapsed = time.time() - start
             await asyncio.sleep(max(0.0, interval - elapsed))
 
     async def _update_quotes(self) -> None:
         for symbol, cfg in self.config.assets.items():
-            state = self.states[symbol]
-            decision = self._build_quote_decision(state)
-            if decision is None:
-                continue
-            await self._ensure_orders(symbol, state, decision)
+            try:
+                state = self.states[symbol]
+                decision = self._build_quote_decision(state)
+                if decision is None:
+                    continue
+                await self._ensure_orders(symbol, state, decision)
+            except Exception as exc:
+                logger.error("Failed to update quotes for %s: %s", symbol, exc, exc_info=exc)
 
     def _build_quote_decision(self, state: AssetState) -> Optional[QuoteDecision]:
         cfg = state.config
@@ -260,7 +299,18 @@ class BrawlerEngine:
 
         bid_price = self._normalize_price(cfg, pfair - half_spread - gamma)
         ask_price = self._normalize_price(cfg, pfair + half_spread - gamma)
-        order_size = state.config.order_size
+        # Order Sizing
+        if cfg.vol_sizing_risk_dollars > 0:
+            effective_sigma = max(sigma, 0.0005)  # Floor at 5bps vol to prevent explosions
+            # risk_dollars = size_units * price * 2 * sigma
+            # size_units = risk_dollars / (price * 2 * sigma)
+            raw_size = cfg.vol_sizing_risk_dollars / (pfair * 2.0 * effective_sigma)
+            # Clamp to safe limits (e.g. not exceeding max inventory in one clip, or reasonable bounds)
+            # Using max_inventory as a sanity ceiling for single order
+            order_size = min(raw_size, cfg.max_inventory)
+        else:
+            order_size = state.config.order_size
+
         if self.portfolio:
             order_size = self.portfolio.scale_order_size(order_size)
         if order_size <= 0:

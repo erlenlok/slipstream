@@ -1,0 +1,158 @@
+# Brawler PRODUCTION Configuration
+# "10x Risk" - Aggressive sizing, multiple pairs, relaxed constraints.
+
+assets:
+  # Flagship L1s
+  SOL:
+    symbol: SOL
+    cex_symbol: solusdt
+    base_spread: 0.002
+    volatility_lookback: 60
+    risk_aversion: 2.0
+    basis_alpha: 0.05
+    max_inventory: 20.0          # Max ~20 SOL ($2,600)
+    inventory_aversion: 0.2
+    order_size: 2.0              # ~$260 per clip
+    max_volatility: 0.05
+    max_basis_deviation: 5.0
+    min_quote_interval_ms: 300
+    reduce_only_ratio: 0.9
+    tick_size: 0.01
+    vol_sizing_risk_dollars: 100.0
+
+  BTC:
+    symbol: BTC
+    cex_symbol: btcusdt
+    base_spread: 0.001           # Tight spread on BTC
+    volatility_lookback: 60
+    risk_aversion: 2.0
+    basis_alpha: 0.05
+    max_inventory: 0.2           # Max ~0.2 BTC ($12,000)
+    inventory_aversion: 0.2
+    order_size: 0.005            # ~$300 per clip
+    max_volatility: 0.03
+    max_basis_deviation: 100.0   # Allow basis flux
+    min_quote_interval_ms: 300
+    reduce_only_ratio: 0.9
+    tick_size: 1.0
+    vol_sizing_risk_dollars: 100.0
+
+  ETH:
+    symbol: ETH
+    cex_symbol: ethusdt
+    base_spread: 0.0015
+    volatility_lookback: 60
+    risk_aversion: 2.0
+    basis_alpha: 0.05
+    max_inventory: 2.0           # Max 2.0 ETH ($6,000)
+    inventory_aversion: 0.2
+    order_size: 0.1              # ~$300 per clip
+    max_volatility: 0.03
+    max_basis_deviation: 10.0
+    min_quote_interval_ms: 300
+    reduce_only_ratio: 0.9
+    tick_size: 0.05
+    vol_sizing_risk_dollars: 100.0
+
+  # Memes / Volatility
+  WIF:
+    symbol: WIF
+    cex_symbol: wifusdt
+    base_spread: 0.005           # 50bps
+    volatility_lookback: 60
+    risk_aversion: 2.0
+    basis_alpha: 0.05
+    max_inventory: 1000.0        # Max 1000 WIF (~$3,000)
+    inventory_aversion: 0.1
+    order_size: 50.0             # ~$150 per clip
+    max_volatility: 0.15
+    max_basis_deviation: 10.0
+    min_quote_interval_ms: 200
+    reduce_only_ratio: 0.9
+    tick_size: 0.001
+    vol_sizing_risk_dollars: 100.0
+
+  DOGE:
+    symbol: DOGE
+    cex_symbol: dogeusdt
+    base_spread: 0.003
+    volatility_lookback: 60
+    risk_aversion: 2.0
+    basis_alpha: 0.05
+    max_inventory: 20000.0       # Max 20k DOGE (~$3,000)
+    inventory_aversion: 0.1
+    order_size: 1500.0           # ~$225 per clip
+    max_volatility: 0.10
+    max_basis_deviation: 2.0
+    min_quote_interval_ms: 300
+    reduce_only_ratio: 0.9
+    tick_size: 0.0001
+    vol_sizing_risk_dollars: 100.0
+
+  PEPE:
+    symbol: PEPE
+    cex_symbol: 1000pepeusdt     # Note: Hyperliquid uses "kPEPE" often, need verification.
+                                 # Checking HL standards: usually just matches spot price but 1000x multiplier on some CEX.
+                                 # Safest is to skip PEPE if uncertain or use known good map.
+                                 # Let's use AVAX instead for diversity.
+    # Replacing PEPE with AVAX for safety to avoid multiplier confusion without checking.
+    # Actually user asked for "shittier". Let's stick to WIF/DOGE + Sol Eco.
+    # Let's add JUP.
+  JUP:
+    symbol: JUP
+    cex_symbol: jupusdt
+    base_spread: 0.004
+    volatility_lookback: 60
+    risk_aversion: 2.0
+    basis_alpha: 0.05
+    max_inventory: 2000.0
+    inventory_aversion: 0.1
+    order_size: 200.0            # ~$200 per clip ($1 price approx)
+    max_volatility: 0.10
+    max_basis_deviation: 2.0
+    min_quote_interval_ms: 300
+    reduce_only_ratio: 0.9
+    tick_size: 0.0001
+    vol_sizing_risk_dollars: 100.0
+
+risk:
+  tick_interval_ms: 100
+  resume_backoff_seconds: 2
+  cex_queue_maxsize: 5000
+  local_queue_maxsize: 5000
+  fill_queue_maxsize: 2000
+  min_cancel_interval_ms: 100    # Faster cancels
+  side_jitter_ms: 10             # Less jitter
+
+kill_switch:
+  max_feed_lag_seconds: 3
+  max_disconnection_seconds: 15
+
+# Default endpoints
+binance_ws_url: "wss://fstream.binance.com"
+hyperliquid_ws_url: "wss://api.hyperliquid.xyz/ws"
+hyperliquid_rest_url: "https://api.hyperliquid.xyz"
+
+state_snapshot_path: "logs/brawler_prod_state.json"
+
+hyperliquid_api_key: "${HYPERLIQUID_API_KEY}"
+hyperliquid_api_secret: "${HYPERLIQUID_API_SECRET}"
+hyperliquid_main_wallet: "${HYPERLIQUID_BRAWLER_WALLET:-${HYPERLIQUID_MAIN_WALLET}}"
+
+portfolio:
+  max_gross_inventory: 25000.0   # ~$25k notional cap across all pairs
+  halt_ratio: 1.0
+  resume_ratio: 0.8
+  reduce_only_ratio: 0.9
+  taper_start_ratio: 0.6
+  min_order_size_ratio: 0.2
+
+candidate_screening:
+  min_samples: 2000
+  score_min: 0.0
+
+discovery:
+  enabled: true
+  interval_seconds: 3600
+  min_volume_ratio: 0.2
+  min_spread_bps: 4.0

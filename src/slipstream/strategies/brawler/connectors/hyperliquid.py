@@ -50,15 +50,16 @@ class HyperliquidQuoteStream:
                 pass
 
     async def _run(self) -> None:
-        subscriptions = [
-            {"type": "l2Book", "coin": symbol} for symbol in self.symbols
-        ]
-        subscribe_msg = json.dumps({"type": "subscribe", "subscriptions": subscriptions})
-
         while not self._stop.is_set():
             try:
                 async with websockets.connect(self.ws_url, ping_interval=20, ping_timeout=10) as ws:
-                    await ws.send(subscribe_msg)
+                    for symbol in self.symbols:
+                        msg = {
+                            "method": "subscribe",
+                            "subscription": {"type": "l2Book", "coin": symbol}
+                        }
+                        await ws.send(json.dumps(msg))
+                    
                     logger.info("Subscribed to Hyperliquid books: %s", ", ".join(self.symbols))
 
                     async for raw in ws:
@@ -68,12 +69,13 @@ class HyperliquidQuoteStream:
                             data = json.loads(raw)
                         except json.JSONDecodeError:
                             continue
+                        
+                        channel = data.get("channel")
                         update = data.get("data")
-                        if not update:
-                            continue
-                        quote = self._parse(update)
-                        if quote:
-                            self._publish_quote(quote)
+                        if channel == "l2Book" and update:
+                            quote = self._parse(update)
+                            if quote:
+                                self._publish_quote(quote)
             except Exception as exc:
                 logger.warning("Hyperliquid book stream error: %s", exc, exc_info=exc)
                 await asyncio.sleep(self.reconnect_backoff)
@@ -81,23 +83,36 @@ class HyperliquidQuoteStream:
     def _parse(self, update) -> Optional[LocalQuote]:
         if isinstance(update, str):
             return None
-        book = update.get("book")
+        
         symbol = update.get("coin")
-        if not book or not symbol:
+        levels = update.get("levels")
+        if not symbol or not levels:
             return None
 
-        bids = book.get("bids") or []
-        asks = book.get("asks") or []
-        if not bids or not asks:
-            return None
-
+        # levels is [[bids], [asks]]
+        # Each item is {"px": "...", "sz": "...", "n": ...}
         try:
-            bid_px = float(bids[0][0])
-            ask_px = float(asks[0][0])
-        except (ValueError, TypeError, IndexError):
+            bids = levels[0]
+            asks = levels[1]
+            if not bids or not asks:
+                return None
+            
+            # Helper to get price from the level item
+            def get_px(item):
+                if isinstance(item, dict):
+                    return float(item["px"])
+                return float(item[0])
+
+            bid_px = get_px(bids[0])
+            ask_px = get_px(asks[0])
+        except (ValueError, TypeError, IndexError, KeyError):
             return None
 
         ts = update.get("time") or time.time()
+        # Ensure ts is in seconds for the Quote object (API returns millis)
+        if ts > 30000000000:  # simplistic check for millis
+            ts = ts / 1000.0
+            
         return LocalQuote(symbol=symbol, bid=bid_px, ask=ask_px, ts=float(ts))
 
     def _publish_quote(self, quote: LocalQuote) -> None:
@@ -264,6 +279,8 @@ def _extract_order_id(response) -> str:
 
         for key in ("response", "data", "resting", "filled", "orders", "statuses", "status"):
             if key in response:
+                if isinstance(response[key], str) and key == "error":
+                     raise RuntimeError(response[key])
                 oid = _extract_order_id(response[key])
                 if oid:
                     return oid
@@ -302,6 +319,7 @@ class HyperliquidExecutionClient:
         api_secret: str,
         *,
         base_url: str = "https://api.hyperliquid.xyz",
+        target_wallet: Optional[str] = None,
     ) -> None:
         Info, Exchange, constants, Account = _load_hyperliquid_modules()
         wallet = Account.from_key(api_secret)
@@ -311,7 +329,7 @@ class HyperliquidExecutionClient:
         self.exchange = Exchange(
             wallet=wallet,
             base_url=base_url,
-            vault_address=wallet.address,
+            vault_address=target_wallet or wallet.address,
         )
         self.base_url = base_url
         self._lock = asyncio.Lock()
@@ -320,8 +338,8 @@ class HyperliquidExecutionClient:
         kwargs = {
             "name": order.symbol,
             "is_buy": order.side == HyperliquidOrderSide.BUY,
-            "sz": str(order.size),
-            "limit_px": str(order.price),
+            "sz": order.size,
+            "limit_px": order.price,
             "order_type": {"limit": {"tif": "Gtc"}},
             "reduce_only": False,
         }

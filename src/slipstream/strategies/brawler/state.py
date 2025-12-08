@@ -58,10 +58,14 @@ class AssetState:
         self.last_cex_mid_ts = ts
         self.last_cex_latency = max(0.0, now - ts)
 
-    def push_local_mid(self, timestamp: Optional[float] = None) -> None:
+    last_mid_price: float = 0.0
+
+    def push_local_mid(self, price: float = 0.0, timestamp: Optional[float] = None) -> None:
         """Mark the time of the latest Hyperliquid mid-price update."""
         ts = timestamp or time.time()
         now = time.time()
+        if price > 0:
+            self.last_mid_price = price
         self.last_local_mid_ts = ts
         self.last_local_latency = max(0.0, now - ts)
 

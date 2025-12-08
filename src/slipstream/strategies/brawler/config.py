@@ -67,6 +67,7 @@ class BrawlerAssetConfig:
     reduce_only_ratio: float = 0.92
     tick_size: float = 0.1
     quote_reprice_tolerance_ticks: float = 1.0
+    vol_sizing_risk_dollars: float = 0.0  # If > 0, overrides order_size with N / (2 * sigma)
 
     def as_dict(self) -> Dict[str, Any]:
         return {
@@ -85,6 +86,7 @@ class BrawlerAssetConfig:
             "reduce_only_ratio": self.reduce_only_ratio,
             "tick_size": self.tick_size,
             "quote_reprice_tolerance_ticks": self.quote_reprice_tolerance_ticks,
+            "vol_sizing_risk_dollars": self.vol_sizing_risk_dollars,
         }
 
 
@@ -110,6 +112,19 @@ class BrawlerCandidateScreeningConfig:
 
 
 @dataclass
+class BrawlerDiscoveryConfig:
+    """Configuration for runtime candidate discovery."""
+
+    enabled: bool = True
+    interval_seconds: float = 3600.0
+    min_volume_ratio: float = 0.3
+    min_spread_bps: float = 5.0
+    max_funding_rate: float = 0.001
+    benchmarks: list[str] = field(default_factory=lambda: ["BTC", "ETH"])
+
+
+
+@dataclass
 class BrawlerConfig:
     """Top-level configuration for the market-maker."""
 
@@ -127,6 +142,7 @@ class BrawlerConfig:
     candidate_screening: BrawlerCandidateScreeningConfig = field(
         default_factory=BrawlerCandidateScreeningConfig
     )
+    discovery: BrawlerDiscoveryConfig = field(default_factory=BrawlerDiscoveryConfig)
 
     def asset(self, symbol: str) -> BrawlerAssetConfig:
         try:
@@ -217,6 +233,7 @@ def load_brawler_config(path: Optional[str] = None) -> BrawlerConfig:
     risk_payload = payload.get("risk") or {}
     kill_switch_payload = payload.get("kill_switch") or {}
     candidate_payload = payload.get("candidate_screening") or {}
+    discovery_payload = payload.get("discovery") or {}
 
     assets_payload = payload.get("assets")
     if not assets_payload:
@@ -243,6 +260,7 @@ def load_brawler_config(path: Optional[str] = None) -> BrawlerConfig:
         kill_switch=BrawlerKillSwitchConfig(**kill_switch_payload),
         portfolio=BrawlerPortfolioConfig(**portfolio_payload),
         candidate_screening=BrawlerCandidateScreeningConfig(**candidate_payload),
+        discovery=BrawlerDiscoveryConfig(**discovery_payload),
     )
 
     return config
@@ -255,5 +273,6 @@ __all__ = [
     "BrawlerKillSwitchConfig",
     "BrawlerRiskConfig",
     "BrawlerPortfolioConfig",
+    "BrawlerDiscoveryConfig",
     "load_brawler_config",
 ]

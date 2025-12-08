@@ -72,6 +72,7 @@ async def _run_loop(
         api_key=resolved_api_key,
         api_secret=resolved_api_secret,
         base_url=config.hyperliquid_rest_url,
+        target_wallet=resolved_wallet,
     )
     engine = BrawlerEngine(
         config,

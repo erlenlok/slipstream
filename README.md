@@ -3,91 +3,68 @@
 [![Status: Multi-Strategy Ready](https://img.shields.io/badge/status-multi--strategy%20ready-4c1)](#-strategy-onboarding-toolkit)
 [![Registered Strategies](https://img.shields.io/badge/strategies-2%20registered-1c8adb)](#-strategy-onboarding-toolkit)
 
-**Beta-neutral statistical arbitrage framework for Hyperliquid perpetual futures.**
+**Multi-Strategy Capital Allocation Platform for Hyperliquid perpetual futures.**
 
-Slipstream is a multi-strategy framework that includes various approaches to trading perpetual futures with risk management, dynamically rebalancing to maximize risk-adjusted returns while hedging systematic market exposure.
+Slipstream is a modular "Factory" for algorithmic strategies where autonomous trading pods are managed by a central capital allocator. It combines various approaches to trading perpetual futures with risk management, dynamically rebalancing to maximize risk-adjusted returns while hedging systematic market exposure.
 
-## 🎯 Strategy Characterization
+## Strategy Characterization
 
-The framework supports multiple strategies with different approaches to market neutrality and risk management. The original H* optimization research has been moved to legacy modules for historical reference.
+The framework supports multiple strategies with different approaches to market neutrality and risk management.
 
-## 🚀 Features
+## Features
 
-- ✅ **Joint Alpha + Funding Optimization**: Train both models simultaneously to find optimal H*
-- ✅ **Beta-Neutral Portfolio Optimizer**: Closed-form + cost-aware optimization with leverage constraints
-- ✅ **Transaction Cost Modeling**: Power-law impact model with liquidity-adjusted parameters
-- ✅ **Walk-Forward Backtesting**: Full path-dependent simulation with realistic costs
-- ✅ **Discrete Lot Rounding**: Beta repair algorithm for production trading
-- ✅ **Multi-Source Data Pipeline**: API (7 months) + S3 archive (Oct 2023+)
-- ✅ **Timescale-Matched PCA**: Factor decomposition adapts to holding period H
-- ✅ **EWMA Momentum Signals**: Multi-span idiosyncratic momentum features
-- ✅ **Volume-Weighted PCA**: Three weighting methods (sqrt, log, sqrt_dollar)
-- ✅ **Gradient Companion Strategy**: Balanced trend-following overlay built on shared tooling ✨ NEW
-- ✅ **Multi-Strategy Toolkit**: Registry, template package, and dispatch CLIs for onboarding new strategies ✨ NEW
-- ✅ **Brawler Passive Market Maker**: CEX-anchored, volatility-aware quoting loop for slow liquidity providers ✨ NEW
+- **Brawler Passive Market Maker**: CEX-anchored, volatility-aware quoting loop for slow liquidity providers.
+- **Gradient Companion Strategy**: Balanced trend-following overlay built on shared tooling.
+- **Multi-Strategy Architecture**: Autonomous strategy pods with standardized lifecycles.
+- **Portfolio Capital Allocator**: Dynamic re-allocation based on performance and covariance.
+- **Independent Risk Monitor**: Read-only process verifying actual vs. reported exposures.
+- **Implementation Shortfall Analysis**: Tracking decision price vs. realized execution.
+- **Lifecycle Management**: Automated Incubation → Growth → Retirement progression.
 
-## 📊 Repo Layout
+### Core Technology
+
+- **Joint Alpha + Funding Optimization**: Train both models simultaneously to find optimal H*.
+- **Beta-Neutral Portfolio Optimizer**: Closed-form + cost-aware optimization with leverage constraints.
+- **Transaction Cost Modeling**: Power-law impact model with liquidity-adjusted parameters.
+- **Walk-Forward Backtesting**: Full path-dependent simulation with realistic costs.
+- **Discrete Lot Rounding**: Beta repair algorithm for production trading.
+- **Multi-Source Data Pipeline**: API (7 months) + S3 archive (Oct 2023+).
+- **Timescale-Matched PCA**: Factor decomposition adapts to holding period H.
+- **EWMA Momentum Signals**: Multi-span idiosyncratic momentum features.
+- **Volume-Weighted PCA**: Three weighting methods (sqrt, log, sqrt_dollar).
+
+## Repo Layout
 
 ```
 slipstream/
-├── src/slipstream/                  # Importable Python package
-│   ├── core/                        # Shared services for every strategy
-│   │   ├── common/                  # Return & volatility utilities
-│   │   ├── config/                  # Layered config loader and helpers ✨ NEW
-│   │   ├── signals/                 # Signal generators (EWMA, PCA, filters)
-│   │   ├── portfolio/               # Optimisers, backtesting engines
-│   │   ├── costs/                   # Transaction cost models
-│   │   └── funding/                 # Funding data prep helpers
-│   ├── strategies/                  # Strategy-specific implementations
-│   │   ├── gradient/                # Gradient live + backtest stack ✨ NEW LOCATION
-│   │   └── template/                # Scaffold for new strategies
-│   ├── common/                      # Legacy shim → slipstream.core.common
-│   ├── signals/                     # Legacy shim → slipstream.core.signals
-│   ├── portfolio/                   # Legacy shim → slipstream.core.portfolio
-│   ├── costs/                       # Legacy shim → slipstream.core.costs
-│   ├── funding/                     # Legacy shim → slipstream.core.funding
-│   └── alpha/                       # Price alpha research modules
-├── scripts/
-│   ├── data_load.py             # API data fetcher
-│   ├── fetch_s3_historical.py   # S3 historical downloader
-│   ├── build_pca_factor.py      # PCA factor computation
-│   ├── gradient_compute_signals.py # Gradient trend strength CLI ✨ NEW
-│   ├── gradient_run_backtest.py # Gradient backtest CLI ✨ NEW
-│   └── strategies/
-│       ├── run_backtest.py      # Multi-strategy backtest dispatcher ✨ NEW
-│       ├── gradient/            # Gradient-specific helpers (scripts + tooling)
-│       └── brawler/             # Brawler live-run scripts (coming online)
-├── legacy/                      # Legacy H* optimization code
-│   ├── scripts/                 # H* optimization and model training scripts
-│   ├── docs/                    # Legacy documentation
-│   └── src/                     # Legacy alpha and funding modules
-├── notebooks/                   # Research & analysis
-├── docs/                        # Documentation
-│   ├── DOCUMENTATION.md         # Consolidated documentation
-│   ├── GRADIENT.md              # Gradient overview & workflow ✨ NEW
-│   └── archive/                 # Deprecated documentation files
-├── data/                        # Data storage (git-ignored)
-│   ├── market_data/             # API data (candles, funding, returns)
-│   ├── s3_historical/           # S3 historical archive
-│   └── features/                # Computed features
-│       ├── alpha_models/        # Trained alpha models
-│       ├── funding_models/      # Trained funding models
-│       └── joint_models/        # Joint optimization results ✨ NEW
-└── tests/                       # Unit tests
+├── src/slipstream/
+│   ├── core/                        # Shared services (signals, portfolio, costs)
+│   ├── federation/                  # Allocation & Risk Layer (Allocator, Auditor)
+│   └── strategies/                  # Strategy Implementations
+│       ├── brawler/                 # Passive Market Maker
+│       ├── gradient/                # Trend Companion
+│       └── template/                # Onboarding Scaffold
+├── scripts/                         # Operational & Analysis Scripts
+│   ├── build_pca_factor.py          # Factor generation
+│   ├── fetch_s3_historical.py       # Data tools
+│   └── strategies/                  # Strategy-specific runners
+├── docs/                            # Documentation Hub
+├── notebooks/                       # Research & Analysis
+└── tests/                           # Unit Tests
 ```
 
-## 🧩 Strategy Onboarding Toolkit
+## Strategy Onboarding Toolkit
 
 - Use `uv run python scripts/strategies/run_backtest.py --strategy <slug> -- --returns-csv ...` to target any registered strategy without hunting for bespoke scripts.
 - The `src/slipstream/strategies/template/` package ships sample config, signal generation, and CLI stubs—copy it to scaffold new ideas quickly.
 - Follow the [strategy onboarding checklist](docs/monorepo_plan/sprint_04_onboarding_checklist.md) and [per-strategy secrets guide](docs/monorepo_plan/strategy_secrets.md) to stay aligned with monorepo conventions.
 - Add metadata + CLI hooks in `slipstream/strategies/__init__.py` so dashboards and dispatch scripts pick up the new strategy automatically.
 
-## 🌈 Gradient Strategy
+## Gradient Strategy
 
 Looking for a simpler trend overlay without the full alpha + funding stack? The new [Gradient strategy](docs/strategies/gradient/README.md) keeps equal dollar-volatility long and short books in the assets with the strongest directional trends. Generate signals with `uv run gradient-signals` and backtest with `uv run gradient-backtest`.
 
-## 🥊 Brawler Passive Market Maker
+## Brawler Passive Market Maker
 
 - Anchors quotes to Binance futures mid-prices, smoothing the local basis to avoid reacting to thin-book noise.
 - Spreads widen automatically with CEX volatility (`base_spread + k * sigma`), so the bot prices in its latency disadvantage.
@@ -114,7 +91,7 @@ Looking for a simpler trend overlay without the full alpha + funding stack? The 
 
 See `docs/BRAWLER_SPEC.md` for the full specification; the new implementation wires that spec into reusable connectors, kill switches, and an auto-resume loop.
 
-## 🏁 Quick Start
+## Quick Start
 
 ### 1. Setup
 
@@ -188,7 +165,7 @@ print(f"Sharpe Ratio: {result.sharpe_ratio():.2f}")
 print(f"Max Drawdown: {result.max_drawdown():.2%}")
 ```
 
-## 📈 Key Results
+## Key Results
 
 ### Joint H* Optimization (n=1000 bootstrap samples)
 
@@ -219,7 +196,7 @@ print(f"Max Drawdown: {result.max_drawdown():.2%}")
 - **Top decile**: Negative funding (-1.52σ) + positive momentum (+0.037) → LONG to collect funding
 - Alpha only predictive in low-funding environments (quantile 9)
 
-## 🔬 Research Workflow
+## Research Workflow
 
 ### Data Acquisition
 
@@ -262,7 +239,7 @@ assert abs(w @ beta_exposures) < 1e-6  # Beta neutral
 assert abs(np.abs(w).sum() - 1.0) < 1e-3  # Leverage = 1
 ```
 
-## 📚 Documentation
+## Documentation
 
 All documentation has been consolidated into a single file:
 
@@ -270,7 +247,7 @@ All documentation has been consolidated into a single file:
 |----------|-------------|
 | [`DOCUMENTATION.md`](docs/DOCUMENTATION.md) | Complete strategy specification, model training, backtesting, and data pipeline guides. |
 
-## 🧪 Testing
+## Testing
 
 ```bash
 # Run all tests
@@ -286,7 +263,7 @@ python tests/test_portfolio_optimizer.py
 # ✓ Costs reduce turnover
 ```
 
-## 🛠️ Development
+## Development
 
 ```bash
 # Lint
@@ -299,7 +276,7 @@ uv run mypy src/
 uv run ruff format src/ tests/
 ```
 
-## 🎓 Key Concepts
+## Key Concepts
 
 ### Beta-Neutral Portfolio
 
@@ -340,52 +317,21 @@ PCA parameters adapt to holding period:
 - **Lookback**: Window = K × H (typically K=30)
 - **Rationale**: Match factor dynamics to trading frequency
 
-## 🚦 Current Status
+## Current Status
 
 **Production Ready:**
-- ✅ Data pipeline (API + S3)
-- ✅ Signal generation
-- ✅ Model training (alpha + funding)
-- ✅ Portfolio optimization
-- ✅ Backtesting framework
-- ✅ Full backtest on historical data
-- 🔄 Cost parameter calibration from L2 orderbook
-- 🔄 Production prediction pipeline
+- Data pipeline (API + S3)
+- Signal generation
+- Model training (alpha + funding)
+- Portfolio optimization
+- Backtesting framework
+- Full backtest on historical data
+- Cost parameter calibration from L2 orderbook
+- Production prediction pipeline
 
-**Future:**
-- 📋 Live trading integration
-- 📋 Automated retraining pipeline
-- 📋 Risk monitoring dashboard
-
-## 📝 Citation
-
-If you use this framework in your research, please cite:
-
-```bibtex
-@software{slipstream2025,
-  title={Slipstream: Beta-Neutral Statistical Arbitrage for Perpetual Futures},
-  author={Your Name},
-  year={2025},
-  url={https://github.com/yourusername/slipstream}
-}
-```
-
-## 📄 License
-
-MIT License - See [LICENSE](LICENSE) for details.
-
-## 🤝 Contributing
-
-Contributions welcome! Please:
-1. Fork the repository
-2. Create a feature branch
-3. Add tests for new functionality
-4. Submit a pull request
-
-## 📞 Contact
-
-Questions? Open an issue or reach out via [your contact method].
-
----
-
-**⚠️ Disclaimer**: This software is for research purposes only. Trading involves substantial risk of loss. Past performance does not guarantee future results.
+**Allocation & Risk Layer:**
+- Autonomous Strategy Pods (API Standardized)
+- Portfolio Allocator (Meta-Optimizer)
+- Independent Risk Monitor (Auditor)
+- Lifecycle Manager
+- Execution Quality Analytics (Shortfall, Fill Ratios)
