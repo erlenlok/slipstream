@@ -123,6 +123,20 @@ class BrawlerDiscoveryConfig:
     benchmarks: list[str] = field(default_factory=lambda: ["BTC", "ETH"])
 
 
+@dataclass
+class BrawlerEconomicsConfig:
+    """Economic constraints and shadow pricing."""
+
+    cost_per_request_usd: float = 0.00035
+    tolerance_dilation_k: float = 1000.0  # Controls how fast tolerance expands as budget drops
+    survival_tolerance_ticks: float = 100.0  # Fallback when budget <= 0
+    
+    # Reloader (Pay-to-Play)
+    reload_threshold_budget: float = 0.0  # Trigger reload when budget drops below this
+    reload_target_budget: float = 5000.0  # Target budget after reload
+    reload_symbol: str = "BTC"  # Asset to trade for volume generation
+    max_spread_bps: float = 5.0  # Safety: Don't reload if spread is wider than this
+
 
 @dataclass
 class BrawlerConfig:
@@ -143,6 +157,7 @@ class BrawlerConfig:
         default_factory=BrawlerCandidateScreeningConfig
     )
     discovery: BrawlerDiscoveryConfig = field(default_factory=BrawlerDiscoveryConfig)
+    economics: BrawlerEconomicsConfig = field(default_factory=BrawlerEconomicsConfig)
 
     def asset(self, symbol: str) -> BrawlerAssetConfig:
         try:
@@ -234,6 +249,7 @@ def load_brawler_config(path: Optional[str] = None) -> BrawlerConfig:
     kill_switch_payload = payload.get("kill_switch") or {}
     candidate_payload = payload.get("candidate_screening") or {}
     discovery_payload = payload.get("discovery") or {}
+    economics_payload = payload.get("economics") or {}
 
     assets_payload = payload.get("assets")
     if not assets_payload:
@@ -261,6 +277,7 @@ def load_brawler_config(path: Optional[str] = None) -> BrawlerConfig:
         portfolio=BrawlerPortfolioConfig(**portfolio_payload),
         candidate_screening=BrawlerCandidateScreeningConfig(**candidate_payload),
         discovery=BrawlerDiscoveryConfig(**discovery_payload),
+        economics=BrawlerEconomicsConfig(**economics_payload),
     )
 
     return config
@@ -274,5 +291,6 @@ __all__ = [
     "BrawlerRiskConfig",
     "BrawlerPortfolioConfig",
     "BrawlerDiscoveryConfig",
+    "BrawlerEconomicsConfig",
     "load_brawler_config",
 ]

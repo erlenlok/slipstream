@@ -1,5 +1,5 @@
 [Unit]
-Description=Brawler Market Maker Service
+Description=Brawler Algo Trading Strategy (Headless)
 After=network.target
 
 [Service]
@@ -7,11 +7,11 @@ Type=simple
 User=ubuntu
 WorkingDirectory=/home/ubuntu/slipstream
 EnvironmentFile=/home/ubuntu/slipstream/.env.brawler
-Environment=PYTHONUNBUFFERED=1
-# Run python directly to ensure singular process management
-ExecStart=/home/ubuntu/.local/bin/uv run python -m slipstream.strategies.brawler.cli --config config/brawler_prod.yaml
+ExecStart=/usr/bin/python3 -m slipstream.strategies.brawler.cli --config /home/ubuntu/slipstream/config/brawler_headless.yaml
 Restart=always
 RestartSec=5
+StandardOutput=append:/home/ubuntu/slipstream/logs/brawler.log
+StandardError=append:/home/ubuntu/slipstream/logs/brawler.err.log
 
 [Install]
 WantedBy=multi-user.target

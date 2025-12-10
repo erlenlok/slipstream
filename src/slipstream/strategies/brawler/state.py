@@ -59,6 +59,8 @@ class AssetState:
         self.last_cex_latency = max(0.0, now - ts)
 
     last_mid_price: float = 0.0
+    best_bid: float = 0.0
+    best_ask: float = 0.0
 
     def push_local_mid(self, price: float = 0.0, timestamp: Optional[float] = None) -> None:
         """Mark the time of the latest Hyperliquid mid-price update."""
@@ -68,6 +70,13 @@ class AssetState:
             self.last_mid_price = price
         self.last_local_mid_ts = ts
         self.last_local_latency = max(0.0, now - ts)
+    
+    def update_bbo(self, bid: float, ask: float, timestamp: Optional[float] = None) -> None:
+        """Update the best bid/ask and derived mid."""
+        self.best_bid = bid
+        self.best_ask = ask
+        mid = (bid + ask) / 2.0
+        self.push_local_mid(mid, timestamp)
 
     def update_sigma(self) -> float:
         """Recompute rolling sigma using stored CEX mids."""

@@ -15,6 +15,7 @@ from .config import BrawlerAssetConfig, BrawlerConfig
 from .connectors import (
     BinanceTickerStream,
     HyperliquidExecutionClient,
+    HyperliquidInfoClient,
     HyperliquidOrder,
     HyperliquidOrderSide,
     HyperliquidOrderUpdate,
@@ -22,7 +23,9 @@ from .connectors import (
     HyperliquidUserFillStream,
 )
 from .discovery import DiscoveryEngine
+from .economics import RequestPurse, ToleranceController
 from .feeds import CexQuote, FillEvent, LocalQuote
+from .reloader import ReloaderAgent
 from .inventory import InventoryProvider
 from .persistence import FileStatePersistence, StatePersistence
 from .portfolio import PortfolioController
@@ -106,6 +109,23 @@ class BrawlerEngine:
         self.discovery = DiscoveryEngine(config)
         self._last_cancel_ts: Dict[str, float] = {}
 
+        # Economics
+        self.purse = RequestPurse(
+            cost_per_request=config.economics.cost_per_request_usd
+        )
+        self.controller = ToleranceController(
+            min_tolerance_ticks=1.0,  # We will override this per-asset call actually, but init details here
+            dilation_k=config.economics.tolerance_dilation_k,
+            survival_tolerance_ticks=config.economics.survival_tolerance_ticks
+        )
+        self.reloader = ReloaderAgent(
+            config=config.economics,
+            purse=self.purse,
+            executor=self.executor,
+            quote_stream=self.hyperliquid_stream
+        )
+        self.info_client = HyperliquidInfoClient(base_url=config.hyperliquid_rest_url)
+
     async def start(self) -> None:
         logger.info("Starting Brawler engine with %d assets.", len(self.states))
         await self._bootstrap_inventory()
@@ -120,6 +140,8 @@ class BrawlerEngine:
             asyncio.create_task(self._consume_local_quotes(), name="brawler-local-quotes"),
             asyncio.create_task(self._quote_loop(), name="brawler-quote-loop"),
             asyncio.create_task(self._log_status_summary(), name="brawler-status-log"),
+            asyncio.create_task(self._sync_economics(), name="brawler-economics-sync"),
+            asyncio.create_task(self._monitor_reload_needs(), name="brawler-reloader"),
         ]
         if self.fill_stream:
             self._tasks.append(asyncio.create_task(self._consume_fills(), name="brawler-fills"))
@@ -144,6 +166,20 @@ class BrawlerEngine:
             await asyncio.sleep(interval)
             
             lines = ["\n📊 Brawler Status Summary"]
+            budget = self.purse.request_budget
+            threshold = self.config.economics.reload_threshold_budget
+            
+            if budget < threshold:
+                econ_status = "CRITICAL"
+            elif budget < threshold + 1000:
+                econ_status = "POOR"
+            else:
+                econ_status = "HEALTHY"
+
+            lines.append(
+                f"  [ECON] Requests: {self.purse.request_count} | Vol: ${self.purse.cumulative_volume:,.0f} | "
+                f"Budget: {budget:+.1f} | Tol: {self.controller.calculate_tolerance(budget):.0f}t | Status: {econ_status}"
+            )
             for symbol, state in self.states.items():
                 cex_mid = state.cex_mid_window[-1] if state.cex_mid_window else 0.0
                 local_mid = (
@@ -164,6 +200,57 @@ class BrawlerEngine:
                 )
             logger.info("\n".join(lines))
 
+    async def _sync_economics(self) -> None:
+        """Periodically sync local purse with exchange truth."""
+        interval = 60.0
+        while not self._stop.is_set():
+            await asyncio.sleep(interval)
+            try:
+                wallet = self.config.hyperliquid_main_wallet
+                if not wallet:
+                    continue
+                
+                info = await self.info_client.get_user_rate_limit(wallet)
+                # Response: {"cumVlm": "...", "nRequestsUsed": 123, ...}
+                req_used = int(info.get("nRequestsUsed", 0))
+                cum_vol = float(info.get("cumVlm", "0"))
+                
+                self.purse.sync(req_used, cum_vol)
+                logger.debug("Synced economics: req=%d, vol=%.2f", req_used, cum_vol)
+            except Exception as exc:
+                logger.warning("Failed to sync economics: %s", exc)
+
+    async def _monitor_reload_needs(self) -> None:
+        """Periodically check if we need to reload request credits."""
+        interval = 10.0
+        while not self._stop.is_set():
+            await asyncio.sleep(interval)
+            
+            try:
+                # Identify target asset state
+                target_symbol = self.config.economics.reload_symbol
+                # If symbol is not in our main brawler assets, we can't get quote easily.
+                # Assuming user configures reload_symbol to be one of the traded assets.
+                state = self.states.get(target_symbol)
+                
+                if not state:
+                    # If not tracking locally, we can't easily check spread
+                    continue
+                    
+                # Get Mid/Spread from BBO
+                if state.best_bid <= 0 or state.best_ask <= 0:
+                    continue
+                    
+                mid = (state.best_bid + state.best_ask) / 2.0
+                spread = abs(state.best_ask - state.best_bid)
+                
+                await self.reloader.check_and_reload(mid, spread)
+                
+            except Exception as exc:
+                logger.error("Error in reload monitor: %s", exc)
+            
+            await asyncio.sleep(interval)
+    
     async def _consume_cex_quotes(self) -> None:
         from collections import deque
 
@@ -176,6 +263,15 @@ class BrawlerEngine:
             maxlen = max(2, cfg.volatility_lookback)
             if state.cex_mid_window.maxlen != maxlen:
                 state.cex_mid_window = deque(state.cex_mid_window, maxlen=maxlen)
+            
+            # Rate limit updates for volatility stability (1Hz)
+            # We still want the LATEST price, but we don't need 50 updates/sec for volatility
+            if quote.ts - state.last_cex_mid_ts < 1.0:
+                 # If queue is not empty, skip this one and get the next (fresher) one
+                 # If queue is empty, we might as well use this one to stay current?
+                 # Actually, for volatility, we want *stability*. Skipping is fine.
+                 continue
+
             state.push_cex_mid(quote.mid, quote.ts)
             state.update_sigma()
 
@@ -186,14 +282,23 @@ class BrawlerEngine:
             if not cfg:
                 continue
             state = self.states[quote.symbol]
-            state.push_local_mid(quote.mid, quote.ts)
-            cex_cfg = self._config_for_cex_symbol(cfg.cex_symbol.upper())
-            if cex_cfg is None:
+            if state.config.symbol != quote.symbol:
+                # Mismatch - ignore or log warning
                 continue
-            cex_state = self.states[cfg.symbol]
-            basis = quote.mid - cex_state.cex_mid_window[-1] if cex_state.cex_mid_window else 0.0
-            cex_state.last_basis = basis
-            cex_state.update_basis(basis)
+            
+            # Update state with BBO
+            state.update_bbo(quote.bid, quote.ask, quote.ts)
+            
+            # Basis handling
+            if state.last_cex_mid_ts > 0:
+                cex_mid = state.cex_mid_window[-1]
+                # basis = log(local_mid / cex_mid)
+                # Use the just-updated mid
+                local_mid = (quote.bid + quote.ask) / 2.0
+                if cex_mid > 0 and local_mid > 0:
+                    basis = local_mid - cex_mid
+                    state.last_basis = basis
+                    state.update_basis(basis)
 
     async def _consume_fills(self) -> None:
         if not self.fill_stream:
@@ -301,13 +406,28 @@ class BrawlerEngine:
         ask_price = self._normalize_price(cfg, pfair + half_spread - gamma)
         # Order Sizing
         if cfg.vol_sizing_risk_dollars > 0:
-            effective_sigma = max(sigma, 0.0005)  # Floor at 5bps vol to prevent explosions
+            effective_sigma = max(sigma, 0.01)  # Floor at 1% vol to prevent massive sizing on flat markets
             # risk_dollars = size_units * price * 2 * sigma
             # size_units = risk_dollars / (price * 2 * sigma)
             raw_size = cfg.vol_sizing_risk_dollars / (pfair * 2.0 * effective_sigma)
-            # Clamp to safe limits (e.g. not exceeding max inventory in one clip, or reasonable bounds)
+            # Clamp to safe limits
             # Using max_inventory as a sanity ceiling for single order
             order_size = min(raw_size, cfg.max_inventory)
+
+            # Log sizing logic periodically (approx every ~few seconds per asset if ticking fast)
+            if random.random() < 0.05:
+                logger.info(
+                    "Sizing %s: sigma=%.5f eff_sigma=%.4f risk=$%.2f pfair=%.4f -> raw=%.4f clamped=%.4f",
+                    cfg.symbol, sigma, effective_sigma, cfg.vol_sizing_risk_dollars, pfair, raw_size, order_size
+                )
+            
+            # Enforce Exchange Minimum Floor (User requested ~$10 min)
+            # We calculate value roughly: size * price
+            # If size * price < 10, bump size.
+            val = order_size * pfair
+            if val < 10.0:
+                order_size = 10.0 / pfair
+                
         else:
             order_size = state.config.order_size
 
@@ -325,6 +445,33 @@ class BrawlerEngine:
             gamma=gamma,
             order_size=order_size,
         )
+
+    async def add_asset(self, config: BrawlerAssetConfig) -> None:
+        """Dynamically register a new asset for trading."""
+        if config.symbol in self.states:
+            return
+            
+        logger.info("Adding new asset to Brawler: %s", config.symbol)
+        
+        # 1. Init State
+        state = AssetState(config=config)
+        self.states[config.symbol] = state
+        
+        # 2. Update Indexes
+        self.config.assets[config.symbol] = config
+        self._symbol_index[config.symbol.upper()] = config.symbol
+        self._cex_symbol_index[config.cex_symbol.upper()] = config.symbol
+        
+        # 3. Subscribe Feeds
+        await self.binance_stream.subscribe(config.cex_symbol)
+        await self.hyperliquid_stream.subscribe(config.symbol)
+        
+        # 4. Bootstrap Inventory (Background)
+        if self.inventory_provider:
+            # We fire and forget the inventory fetch for this single asset
+            # Or we can just let it start at 0 and sync later if we had a full sync loop.
+            # For simplicity, we assume 0 start or wait for next fill/sync.
+            pass
 
     async def _ensure_orders(self, symbol: str, state: AssetState, decision: QuoteDecision) -> None:
         """Cancel/replace logic; only one resting order per side."""
@@ -366,7 +513,15 @@ class BrawlerEngine:
     ) -> None:
         snapshot = state.active_bid if side == HyperliquidOrderSide.BUY else state.active_ask
         tick = max(state.config.tick_size, 1e-12)
-        tolerance = state.config.quote_reprice_tolerance_ticks * tick
+        
+        # Dynamic Tolerance Calculation
+        budget = self.purse.request_budget
+        dynamic_ticks = self.controller.calculate_tolerance(budget)
+        # Use the greater of config-static tolerance or dynamic economic tolerance
+        final_ticks = max(dynamic_ticks, state.config.quote_reprice_tolerance_ticks)
+        
+        tolerance = final_ticks * tick
+        
         target_price = self._normalize_price(state.config, target_price)
         if snapshot and math.isclose(snapshot.price, target_price, rel_tol=1e-5):
             return

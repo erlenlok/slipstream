@@ -38,6 +38,26 @@ class BinanceTickerStream:
         self.queue: asyncio.Queue[CexQuote] = asyncio.Queue(maxsize=self.queue_maxsize)
         self._task: Optional[asyncio.Task[None]] = None
         self._stop = asyncio.Event()
+        self._ws = None
+
+    async def subscribe(self, symbol: str) -> None:
+        """Subscribe to a new symbol at runtime."""
+        s = symbol.lower()
+        if s in self.symbols:
+            return
+        self.symbols.append(s)
+        if self._ws:
+            try:
+                # Binance stream subscribe format
+                msg = {
+                    "method": "SUBSCRIBE",
+                    "params": [f"{s}@bookTicker"],
+                    "id": int(time.time() * 1000)
+                }
+                await self._ws.send(json.dumps(msg))
+                logger.info("Dynamically subscribed to Binance %s", s)
+            except Exception as exc:
+                logger.error("Failed to dynamic subscribe Binance %s: %s", symbol, exc)
 
     def start(self) -> None:
         if self._task is None:
@@ -58,7 +78,9 @@ class BinanceTickerStream:
 
         while not self._stop.is_set():
             try:
+                # Note: initial connection URL handles the initial list
                 async with websockets.connect(target, ping_interval=20, ping_timeout=10) as ws:
+                    self._ws = ws
                     logger.info("Binance bookTicker stream connected: %s", stream)
                     async for raw in ws:
                         if self._stop.is_set():

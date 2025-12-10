@@ -35,6 +35,23 @@ class HyperliquidQuoteStream:
         self.queue: asyncio.Queue[LocalQuote] = asyncio.Queue(maxsize=self.queue_maxsize)
         self._task: Optional[asyncio.Task[None]] = None
         self._stop = asyncio.Event()
+        self._ws = None
+
+    async def subscribe(self, symbol: str) -> None:
+        """Subscribe to a new symbol at runtime."""
+        if symbol in self.symbols:
+            return
+        self.symbols.append(symbol)
+        if self._ws:
+            try:
+                msg = {
+                    "method": "subscribe",
+                    "subscription": {"type": "l2Book", "coin": symbol}
+                }
+                await self._ws.send(json.dumps(msg))
+                logger.info("Dynamically subscribed to HL %s", symbol)
+            except Exception as exc:
+                logger.error("Failed to dynamic subscribe HL %s: %s", symbol, exc)
 
     def start(self) -> None:
         if self._task is None:
@@ -53,6 +70,7 @@ class HyperliquidQuoteStream:
         while not self._stop.is_set():
             try:
                 async with websockets.connect(self.ws_url, ping_interval=20, ping_timeout=10) as ws:
+                    self._ws = ws
                     for symbol in self.symbols:
                         msg = {
                             "method": "subscribe",
@@ -273,7 +291,10 @@ def _extract_order_id(response) -> str:
     if isinstance(response, dict):
         status = response.get("status")
         if status == "err":
-            raise RuntimeError(response.get("error", "Unknown order error"))
+            msg = response.get("error", "Unknown order error")
+            if msg == "Unknown order error":
+                logger.error("Hyperliquid raw error response: %s", response)
+            raise RuntimeError(msg)
         if "error" in response and status is None:
             raise RuntimeError(response["error"])
 
@@ -359,8 +380,28 @@ class HyperliquidExecutionClient:
             await asyncio.to_thread(self.exchange.cancel, symbol, oid_int)
 
 
+class HyperliquidInfoClient:
+    """Read-only client for fetching Hyperliquid state."""
+
+    def __init__(
+        self,
+        *,
+        base_url: str = "https://api.hyperliquid.xyz",
+        skip_ws: bool = True
+    ) -> None:
+        Info, _, constants, _ = _load_hyperliquid_modules()
+        self.info = Info(base_url=base_url, skip_ws=skip_ws)
+
+    async def get_user_rate_limit(self, wallet_address: str) -> dict:
+        """Fetch user rate limit and volume stats."""
+        # The SDK user_rate_limit call is synchronous (blocking HTTP)
+        return await asyncio.to_thread(self.info.user_rate_limit, wallet_address)
+
+
+
 __all__ = [
     "HyperliquidExecutionClient",
+    "HyperliquidInfoClient",
     "HyperliquidOrder",
     "HyperliquidOrderUpdate",
     "HyperliquidOrderSide",

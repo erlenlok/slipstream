@@ -3,6 +3,7 @@
 from .binance import BinanceTickerStream
 from .hyperliquid import (
     HyperliquidExecutionClient,
+    HyperliquidInfoClient,
     HyperliquidOrder,
     HyperliquidOrderSide,
     HyperliquidOrderType,
@@ -14,6 +15,7 @@ from .hyperliquid import (
 __all__ = [
     "BinanceTickerStream",
     "HyperliquidExecutionClient",
+    "HyperliquidInfoClient",
     "HyperliquidQuoteStream",
     "HyperliquidUserFillStream",
     "HyperliquidOrder",

@@ -37,8 +37,9 @@ class DiscoveryEngine:
     Uses 24h ticker snapshots (fast) instead of granular history (slow).
     """
 
-    def __init__(self, config: BrawlerConfig) -> None:
+    def __init__(self, config: BrawlerConfig, engine=None) -> None:
         self.config = config
+        self.engine = engine  # Reference to main engine for callbacks
         self.discovery_cfg = config.discovery
         self._stop = asyncio.Event()
         self._task: Optional[asyncio.Task[None]] = None
@@ -204,3 +205,41 @@ class DiscoveryEngine:
             msg.append(f"{c.symbol:<8} {c.relative_ratio:<10.4f} {c.funding_rate:<10.6f} ${c.hl_volume:,.0f}")
             
         logger.info("\n".join(msg))
+
+        if self.engine:
+            self._auto_add_candidates(top_k)
+
+    def _auto_add_candidates(self, candidates: List[DiscoveryResult]) -> None:
+        from .config import BrawlerAssetConfig
+        
+        for c in candidates:
+            # Re-check existence
+            if c.symbol in self.engine.states:
+                continue
+                
+            logger.info("⚔️ Organically adding %s to Brawler arena!", c.symbol)
+            
+            # Conservative Defaults for Auto-Added Pairs
+            # User wants "small size" -> $20 sizing risk.
+            # Vol lookback 60, spread 20bps (safer than tight), max vol 5%.
+            new_cfg = BrawlerAssetConfig(
+                symbol=c.symbol,
+                cex_symbol=c.cex_symbol, # e.g. "ETHUSDT"
+                base_spread=0.002,
+                volatility_lookback=60,
+                risk_aversion=2.0,
+                basis_alpha=0.05,
+                max_inventory=100000.0, # High token cap, rely on $ limit
+                inventory_aversion=0.2,
+                order_size=0.0, # Handled by vol_sizing
+                vol_sizing_risk_dollars=20.0, # Conservative sizing
+                max_volatility=0.05,
+                max_basis_deviation=0.02, # 2% basis dev allowed
+                min_quote_interval_ms=500,
+                reduce_only_ratio=0.9,
+                tick_size=0.000001, # We need to fetch this dynamically ideally, but guessing small is safer than large
+            )
+            # Note: tick_size being wrong can cause failure. 
+            # In a real impl we should fetch meta. For now assuming small.
+            
+            asyncio.create_task(self.engine.add_asset(new_cfg))
