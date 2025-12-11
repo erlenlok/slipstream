@@ -76,8 +76,8 @@ class ReloaderAgent:
         symbol = self.config.reload_symbol
         needed_budget = self.config.reload_target_budget - self.purse.request_budget
         
-        # Heuristic: 1 USD vol = 0.001 budget credit
-        target_volume_usd = needed_budget * 1000.0
+        # Heuristic: 1 USD vol = 1 budget credit (Hyperliquid Standard)
+        target_volume_usd = needed_budget * 1.0
         
         # Round trip legs (Buy + Sell). Total Volume = BuyVol + SellVol.
         # So LegSizeUSD = TargetVol / 2
@@ -94,9 +94,13 @@ class ReloaderAgent:
             logger.info("Reload volume too small ($%.2f), boosting to min ($%d).", leg_size_usd, min_usd)
             size = min_usd / price
         
+        # Round size to avoid float_to_wire errors (Hyperliquid generally accepts 5 decimals for major coins)
+        size = round(size, 5)
+        
         # 1. Place Buy
         # Aggressive Limit: Price * 1.05 (5% slippage allowance for instant fill)
-        buy_price = price * 1.02 
+        # Round to integer for BTC/ETH (safe tick size assumption for major pairs)
+        buy_price = float(int(price * 1.02))
         buy_order = HyperliquidOrder(
             symbol=symbol,
             price=buy_price, # We rely on executor to round/tick this if needed, or we explicitly round?
@@ -112,10 +116,13 @@ class ReloaderAgent:
         # We don't wait for fill confirmation here (optimistic wash), or we should?
         # Ideally we wait for fill. But implementation plan said "Buy -> Wait -> Sell".
         
-        await asyncio.sleep(2.0) # Wait for fill and settlement/state update
+        # Rate Limit Safety: When in debt, we are limited to ~1 req / 10s.
+        # Wait 15s to ensure the Sell order doesn't hit "Too many requests" before volume credits apply.
+        logger.info("Waiting 15s between legs for rate limit safety...")
+        await asyncio.sleep(15.0)
         
         # 2. Place Sell
-        sell_price = price * 0.98
+        sell_price = float(int(price * 0.98))
         sell_order = HyperliquidOrder(
             symbol=symbol,
             price=sell_price,

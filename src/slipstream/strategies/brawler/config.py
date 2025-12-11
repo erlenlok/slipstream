@@ -139,6 +139,20 @@ class BrawlerEconomicsConfig:
 
 
 @dataclass
+class BrawlerAnalyticsConfig:
+    """Configuration for performance analytics and storage."""
+
+    enabled: bool = False
+    db_host: str = "localhost"
+    db_port: int = 5432
+    db_name: str = "slipstream_analytics"
+    db_user: str = "postgres"
+    db_password: str = "postgres"
+    alert_webhook_url: Optional[str] = None
+
+
+
+@dataclass
 class BrawlerConfig:
     """Top-level configuration for the market-maker."""
 
@@ -158,6 +172,8 @@ class BrawlerConfig:
     )
     discovery: BrawlerDiscoveryConfig = field(default_factory=BrawlerDiscoveryConfig)
     economics: BrawlerEconomicsConfig = field(default_factory=BrawlerEconomicsConfig)
+    analytics: BrawlerAnalyticsConfig = field(default_factory=BrawlerAnalyticsConfig)
+
 
     def asset(self, symbol: str) -> BrawlerAssetConfig:
         try:
@@ -250,6 +266,8 @@ def load_brawler_config(path: Optional[str] = None) -> BrawlerConfig:
     candidate_payload = payload.get("candidate_screening") or {}
     discovery_payload = payload.get("discovery") or {}
     economics_payload = payload.get("economics") or {}
+    analytics_payload = payload.get("analytics") or {}
+
 
     assets_payload = payload.get("assets")
     if not assets_payload:
@@ -278,7 +296,9 @@ def load_brawler_config(path: Optional[str] = None) -> BrawlerConfig:
         candidate_screening=BrawlerCandidateScreeningConfig(**candidate_payload),
         discovery=BrawlerDiscoveryConfig(**discovery_payload),
         economics=BrawlerEconomicsConfig(**economics_payload),
+        analytics=BrawlerAnalyticsConfig(**analytics_payload),
     )
+
 
     return config
 
@@ -292,5 +312,7 @@ __all__ = [
     "BrawlerPortfolioConfig",
     "BrawlerDiscoveryConfig",
     "BrawlerEconomicsConfig",
+    "BrawlerAnalyticsConfig",
     "load_brawler_config",
 ]
+

@@ -247,6 +247,9 @@ class HyperliquidUserFillStream:
             side=side,
             ts=float(ts),
             order_id=str(payload.get("oid") or ""),
+            fee=float(payload.get("fee") or 0.0),
+            fee_token=str(payload.get("feeToken") or "USDC"),
+            liquidity_type="taker" if payload.get("crossed") else "maker",
         )
 
     def _publish_fill(self, event: FillEvent) -> None:
@@ -269,6 +272,7 @@ class HyperliquidOrder:
     price: float
     size: float
     side: str  # 'buy' for bid, 'sell' for ask
+    alo: bool = False
 
 
 class HyperliquidOrderSide:
@@ -356,12 +360,13 @@ class HyperliquidExecutionClient:
         self._lock = asyncio.Lock()
 
     async def place_limit_order(self, order: HyperliquidOrder) -> HyperliquidOrderUpdate:
+        tif = "Alo" if order.alo else "Gtc"
         kwargs = {
             "name": order.symbol,
             "is_buy": order.side == HyperliquidOrderSide.BUY,
             "sz": order.size,
             "limit_px": order.price,
-            "order_type": {"limit": {"tif": "Gtc"}},
+            "order_type": {"limit": {"tif": tif}},
             "reduce_only": False,
         }
         async with self._lock:

@@ -1,0 +1,31 @@
+assets:
+  WIF:
+    symbol: WIF
+    cex_symbol: WIFUSDT
+  kBONK:
+    symbol: kBONK
+    cex_symbol: 1000BONKUSDT
+  kPEPE:
+    symbol: kPEPE
+    cex_symbol: 1000PEPEUSDT
+  DOGE:
+    symbol: DOGE
+    cex_symbol: DOGEUSDT
+  kSHIB:
+    symbol: kSHIB
+    cex_symbol: 1000SHIBUSDT
+  POPCAT:
+    symbol: POPCAT
+    cex_symbol: POPCATUSDT
+  MEW:
+    symbol: MEW
+    cex_symbol: MEWUSDT
+  MOG:
+    symbol: MOG
+    cex_symbol: 1000MOGUSDT # Check if 1000MOG exists or just MOG
+  FLOKI:
+    symbol: FLOKI
+    cex_symbol: FLOKIUSDT
+  BRETT:
+    symbol: BRETT
+    cex_symbol: BRETTUSDT

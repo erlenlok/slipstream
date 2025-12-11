@@ -44,6 +44,9 @@ class FillEvent:
     side: str  # 'buy' if we bought, 'sell' if we sold
     ts: float
     order_id: Optional[str] = None
+    fee: float = 0.0
+    fee_token: str = "USDC"
+    liquidity_type: str = "maker"
 
 
 __all__ = ["CexQuote", "LocalQuote", "FillEvent"]

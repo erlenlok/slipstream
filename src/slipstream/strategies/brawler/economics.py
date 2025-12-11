@@ -98,14 +98,10 @@ class RequestPurse:
            
         Note: This means we start at 0 and go negative until we trade.
         """
-        # Heuristic: 100k vol -> 10k requests? 
-        # HL limits are generous, so let's say 1 USD vol pays for ~0.1 requests (if req cost is low).
-        # Actually, let's just make it normalized:
-        # Budget = (Vol * 0.001) - (Requests * Cost) 
-        # If Cost=0.00035, then 1 Vol ($1) pays for ~3 requests.
-        income = self._cumulative_volume * 0.001 
-        cost = self._request_count * self.cost_per_request
-        return income - cost
+        # Hyperliquid Rate Limit Rule: 1 USDC Volume frees up 1 Request.
+        # We track "Surplus Requests" as the budget.
+        # Budget = Volume - Requests
+        return self._cumulative_volume - self._request_count
 
 
 class ToleranceController:

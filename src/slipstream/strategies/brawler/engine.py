@@ -9,6 +9,7 @@ import math
 import random
 import time
 from dataclasses import dataclass
+from datetime import datetime
 from typing import Dict, Optional
 
 from .config import BrawlerAssetConfig, BrawlerConfig
@@ -36,6 +37,12 @@ from .state import (
     capture_state,
     restore_state,
 )
+from slipstream.analytics.core_metrics_calculator import CoreMetricsCalculator
+from slipstream.analytics.data_structures import TradeEvent, TradeType
+from slipstream.analytics.historical_analyzer import HistoricalAnalyzer
+from slipstream.analytics.per_asset_analyzer import PerAssetPerformanceAnalyzer
+from slipstream.analytics.storage_layer import AnalyticsStorage, DatabaseConfig
+
 
 logger = logging.getLogger(__name__)
 
@@ -126,6 +133,28 @@ class BrawlerEngine:
         )
         self.info_client = HyperliquidInfoClient(base_url=config.hyperliquid_rest_url)
 
+        # Analytics
+        self.core_metrics = None
+        self.historical_analyzer = None
+        self.per_asset_analyzer = None
+        self.analytics_storage = None
+
+        if config.analytics.enabled:
+            logger.info("Initializing Brawler analytics system")
+            self.core_metrics = CoreMetricsCalculator()
+            self.historical_analyzer = HistoricalAnalyzer()
+            self.per_asset_analyzer = PerAssetPerformanceAnalyzer()
+            
+            db_config = DatabaseConfig(
+                host=config.analytics.db_host,
+                port=config.analytics.db_port,
+                database=config.analytics.db_name,
+                username=config.analytics.db_user,
+                password=config.analytics.db_password
+            )
+            self.analytics_storage = AnalyticsStorage(db_config)
+
+
     async def start(self) -> None:
         logger.info("Starting Brawler engine with %d assets.", len(self.states))
         await self._bootstrap_inventory()
@@ -135,7 +164,16 @@ class BrawlerEngine:
             self.fill_stream.start()
         self.discovery.start()
 
+        if self.analytics_storage:
+            try:
+                await self.analytics_storage.connect()
+                await self.analytics_storage.create_tables()
+                logger.info("Connected to analytics storage")
+            except Exception as exc:
+                logger.error("Failed to connect to analytics storage: %s", exc)
+
         self._tasks = [
+
             asyncio.create_task(self._consume_cex_quotes(), name="brawler-cex-quotes"),
             asyncio.create_task(self._consume_local_quotes(), name="brawler-local-quotes"),
             asyncio.create_task(self._quote_loop(), name="brawler-quote-loop"),
@@ -201,24 +239,45 @@ class BrawlerEngine:
             logger.info("\n".join(lines))
 
     async def _sync_economics(self) -> None:
-        """Periodically sync local purse with exchange truth."""
+        """Periodically sync local purse and inventory with exchange truth."""
         interval = 60.0
         while not self._stop.is_set():
-            await asyncio.sleep(interval)
             try:
                 wallet = self.config.hyperliquid_main_wallet
                 if not wallet:
+                    await asyncio.sleep(interval)
                     continue
                 
+                # 1. Sync Rate Limits
                 info = await self.info_client.get_user_rate_limit(wallet)
-                # Response: {"cumVlm": "...", "nRequestsUsed": 123, ...}
                 req_used = int(info.get("nRequestsUsed", 0))
                 cum_vol = float(info.get("cumVlm", "0"))
-                
                 self.purse.sync(req_used, cum_vol)
-                logger.debug("Synced economics: req=%d, vol=%.2f", req_used, cum_vol)
+                
+                # 2. Sync Inventory (Failsafe for websocket drops)
+                # We use the raw info client wrapper to fetch state
+                user_state = await asyncio.to_thread(self.info_client.info.user_state, wallet)
+                for item in user_state.get("assetPositions", []):
+                    pos = item.get("position")
+                    if not pos:
+                        continue
+                    symbol = pos.get("coin")
+                    szi = float(pos.get("szi", 0.0))
+                    
+                    # Update local state if we are tracking this asset
+                    state = self.states.get(symbol)
+                    if state:
+                        # Log if significant drift found (optional)
+                        if abs(state.inventory - szi) > state.config.order_size * 0.1:
+                            logger.info("Inventory drift detected for %s: Local=%.4f, Remote=%.4f. Syncing.", symbol, state.inventory, szi)
+                        state.inventory = szi
+
+                logger.debug("Synced economics and inventory. Req=%d, Vol=%.2f", req_used, cum_vol)
+
             except Exception as exc:
-                logger.warning("Failed to sync economics: %s", exc)
+                logger.warning("Failed to sync economics/inventory: %s", exc)
+            
+            await asyncio.sleep(interval)
 
     async def _monitor_reload_needs(self) -> None:
         """Periodically check if we need to reload request credits."""
@@ -312,6 +371,40 @@ class BrawlerEngine:
             logger.debug(
                 "Inventory update %s: %+f (current=%f)", fill.symbol, fill.size, state.inventory
             )
+            
+            # Analytics Processing
+            if self.core_metrics:
+                try:
+                    trade_type = TradeType.MAKER if getattr(fill, "liquidity_type", "maker") == "maker" else TradeType.TAKER
+                    # Fees/Funding from fill event (extended event)
+                    fees = getattr(fill, "fee", 0.0)
+                    
+                    event = TradeEvent(
+                        timestamp=datetime.fromtimestamp(fill.ts),
+                        symbol=fill.symbol,
+                        side=fill.side,
+                        quantity=abs(fill.size),
+                        price=fill.price,
+                        trade_type=trade_type,
+                        reference_price=fill.price, # Use fill price as ref for now unless we have better
+                        fees_paid=fees,
+                        funding_paid=0.0, # Not in fill stream usually
+                        position_before=state.inventory - fill.size if fill.side == "buy" else state.inventory + fill.size,
+                        position_after=state.inventory,
+                        order_id=fill.order_id
+                    )
+                    
+                    self.core_metrics.process_trade(event)
+                    if self.per_asset_analyzer:
+                        self.per_asset_analyzer.per_asset.add_trade(event)
+                    
+                    if self.analytics_storage:
+                        # Fire and forget storage to not block loop
+                        asyncio.create_task(self.analytics_storage.store_trade_event(event))
+                        
+                except Exception as exc:
+                    logger.error("Error processing analytics for trade: %s", exc, exc_info=exc)
+
 
     async def _quote_loop(self) -> None:
         interval = max(0.1, self.config.risk.tick_interval_ms / 1000.0)

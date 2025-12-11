@@ -1,0 +1,31 @@
+assets:
+  ETH:
+    symbol: ETH
+    cex_symbol: ETHUSDT
+    base_spread: 0.001          # Tighter spread for major
+    volatility_lookback: 60
+    risk_aversion: 2.0          # Lower risk aversion for major
+    max_inventory: 0.5          # Approx $1600
+    order_size: 0.156           # Approx $500
+    min_quote_interval_ms: 1000
+    tick_size: 0.1
+    vol_sizing_risk_dollars: 0.0
+
+risk:
+  tick_interval_ms: 1000
+  metrics_flush_seconds: 60.0
+
+kill_switch:
+  max_disconnection_seconds: 30.0
+
+economics:
+  cost_per_request_usd: 0.00035
+  reload_threshold_budget: 1000.0
+  reload_target_budget: 5000.0
+  reload_symbol: "ETH"
+  max_spread_bps: 5.0           # Tighter spread tolerance for ETH
+
+analytics:
+  enabled: true
+  db_host: "localhost"
+  db_name: "slipstream_analytics"
