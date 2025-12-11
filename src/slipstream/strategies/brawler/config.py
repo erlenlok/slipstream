@@ -68,6 +68,12 @@ class BrawlerAssetConfig:
     tick_size: float = 0.1
     quote_reprice_tolerance_ticks: float = 1.0
     vol_sizing_risk_dollars: float = 0.0  # If > 0, overrides order_size with N / (2 * sigma)
+    # Algorithmic Improvements
+    vol_spread_multiplier: float = 5.0  # Widen spread by k * sigma
+    
+    # Discovery
+    min_basis_bps: float = 0.0  # Opportunity Filter: Stop quoting if basis < X bps
+    momentum_threshold_bps: float = 0.0  # Momentum Guard: Widen/Skew if velocity > X bps/sec (0=disabled)
 
     def as_dict(self) -> Dict[str, Any]:
         return {
@@ -87,6 +93,8 @@ class BrawlerAssetConfig:
             "tick_size": self.tick_size,
             "quote_reprice_tolerance_ticks": self.quote_reprice_tolerance_ticks,
             "vol_sizing_risk_dollars": self.vol_sizing_risk_dollars,
+            "min_basis_bps": self.min_basis_bps,
+            "momentum_threshold_bps": self.momentum_threshold_bps,
         }
 
 

@@ -115,14 +115,14 @@ class HyperliquidQuoteStream:
             if not bids or not asks:
                 return None
             
-            # Helper to get price from the level item
-            def get_px(item):
+            # Helper to get price and size from the level item
+            def get_px_sz(item):
                 if isinstance(item, dict):
-                    return float(item["px"])
-                return float(item[0])
+                    return float(item["px"]), float(item["sz"])
+                return float(item[0]), float(item[1])
 
-            bid_px = get_px(bids[0])
-            ask_px = get_px(asks[0])
+            bid_px, bid_sz = get_px_sz(bids[0])
+            ask_px, ask_sz = get_px_sz(asks[0])
         except (ValueError, TypeError, IndexError, KeyError):
             return None
 
@@ -131,7 +131,14 @@ class HyperliquidQuoteStream:
         if ts > 30000000000:  # simplistic check for millis
             ts = ts / 1000.0
             
-        return LocalQuote(symbol=symbol, bid=bid_px, ask=ask_px, ts=float(ts))
+        return LocalQuote(
+            symbol=symbol, 
+            bid=bid_px, 
+            ask=ask_px, 
+            bid_sz=bid_sz,
+            ask_sz=ask_sz,
+            ts=float(ts)
+        )
 
     def _publish_quote(self, quote: LocalQuote) -> None:
         try:
@@ -401,6 +408,15 @@ class HyperliquidInfoClient:
         """Fetch user rate limit and volume stats."""
         # The SDK user_rate_limit call is synchronous (blocking HTTP)
         return await asyncio.to_thread(self.info.user_rate_limit, wallet_address)
+
+    async def get_open_orders(self, wallet_address: str) -> Optional[list]:
+        """Fetch all open orders for user."""
+        try:
+             # Using open_orders method from SDK Info class
+             return await asyncio.to_thread(self.info.open_orders, wallet_address)
+        except Exception as e:
+            logger.error("Failed to fetch open orders: %s", e)
+            return None
 
 
 

@@ -1,63 +1,6 @@
 # Gradient Live Trading - Quick Start
 
-## 🚀 Immediate Next Steps (3-4 hours to go live)
 
-### 1. Core Components
-
-All live-trading modules are implemented and wired together:
-
-- **`data.py`** fetches live 4-hour candles (with optional Redis caching) and computes momentum signals using the production liquidity filters and multi-span EWMA stack.
-- **`portfolio.py`** ranks the signal panel, applies inverse-volatility sizing, enforces risk limits, and validates the resulting target book.
-- **`execution.py`** manages rebalance execution with two-stage limit→market logic, complete with passive repricing, slippage aggregation, and Hyperliquid context helpers.
-- **`rebalance.py`** is the cron entry point orchestrating config loading, data fetching, signal generation, execution, performance logging, and notifications.
-- **`performance.py` / `notifications.py`** log telemetry (rebalance history, positions, signal tracking) and deliver Telegram/email alerts.
-
-### 2. Set Up API Access (15 minutes)
-
-```bash
-# Export API credentials
-export HYPERLIQUID_API_KEY="your_api_key_here"
-export HYPERLIQUID_API_SECRET="your_api_secret_here"
-
-# Test API connectivity
-python -c "
-import os
-import requests
-api_key = os.environ['HYPERLIQUID_API_KEY']
-response = requests.post('https://api.hyperliquid.xyz/info', json={'type': 'clearinghouseState', 'user': api_key})
-print('API Connected:', response.status_code == 200)
-"
-```
-
-### 3. Configure Strategy (5 minutes)
-
-Edit `config/gradient_live.json`:
-- Set `capital_usd` to your starting capital
-- Keep `dry_run: true` for initial testing
-- Adjust `max_position_pct` if needed (default 10%)
-
-### 4. Test Dry-Run (30 minutes)
-
-```bash
-# Run a single rebalance cycle (dry-run mode)
-python -m slipstream.strategies.gradient.live.rebalance
-
-# Check logs
-tail -f /var/log/gradient/rebalance.log
-```
-
-Expected output:
-```
-[2025-01-15 12:00:00] Starting rebalance cycle...
-[2025-01-15 12:00:05] Fetched data for 183 assets
-[2025-01-15 12:00:06] Computed momentum signals
-[2025-01-15 12:00:06] Selected 64 long, 64 short positions
-[2025-01-15 12:00:06] Target portfolio: 128 positions, $5000 capital
-[2025-01-15 12:00:06] DRY-RUN: Would place 128 orders
-[2025-01-15 12:00:06] Rebalance complete (dry-run)
-```
-
-### 5. Go Live (5 minutes)
 
 When ready to go live:
 

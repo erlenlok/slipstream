@@ -1,17 +1,17 @@
 [Unit]
-Description=Brawler Algo Trading Strategy (Headless)
+Description=Brawler Market Making Strategy
 After=network.target
 
 [Service]
 Type=simple
 User=ubuntu
 WorkingDirectory=/home/ubuntu/slipstream
-EnvironmentFile=/home/ubuntu/slipstream/.env.brawler
-ExecStart=/home/ubuntu/slipstream/.venv/bin/python -m slipstream.strategies.brawler.cli --config /home/ubuntu/slipstream/config/brawler_eth.yaml
-Restart=always
-RestartSec=5
-StandardOutput=append:/home/ubuntu/slipstream/logs/brawler.log
-StandardError=append:/home/ubuntu/slipstream/logs/brawler.err.log
+ExecStart=/home/ubuntu/slipstream/.venv/bin/python -m slipstream.strategies.brawler.cli --config prod_brawler.yaml
+Restart=on-failure
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+Environment="PYTHONUNBUFFERED=1"
 
 [Install]
 WantedBy=multi-user.target

@@ -28,6 +28,8 @@ class LocalQuote:
     bid: float
     ask: float
     ts: float
+    bid_sz: float = 0.0
+    ask_sz: float = 0.0
 
     @property
     def mid(self) -> float:

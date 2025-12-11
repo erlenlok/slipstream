@@ -26,6 +26,11 @@ class AssetState:
     """All mutable, per-asset state (basis estimates, vol window, inventory, etc.)."""
 
     config: BrawlerAssetConfig
+    
+    @property
+    def symbol(self) -> str:
+        return self.config.symbol
+
     fair_basis: float = 0.0
     cex_mid_window: Deque[float] = field(default_factory=lambda: deque(maxlen=600))
     sigma: float = 0.0

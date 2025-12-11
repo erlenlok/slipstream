@@ -1,0 +1,1 @@
+"""Spectrum Strategy - Idiosyncratic Statistical Arbitrage System."""

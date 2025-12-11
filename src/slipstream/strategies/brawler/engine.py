@@ -25,7 +25,7 @@ from .connectors import (
 )
 from .discovery import DiscoveryEngine
 from .economics import RequestPurse, ToleranceController
-from .feeds import CexQuote, FillEvent, LocalQuote
+from .reconciliation import OrderReconciler
 from .reloader import ReloaderAgent
 from .inventory import InventoryProvider
 from .persistence import FileStatePersistence, StatePersistence
@@ -42,6 +42,7 @@ from slipstream.analytics.data_structures import TradeEvent, TradeType
 from slipstream.analytics.historical_analyzer import HistoricalAnalyzer
 from slipstream.analytics.per_asset_analyzer import PerAssetPerformanceAnalyzer
 from slipstream.analytics.storage_layer import AnalyticsStorage, DatabaseConfig
+from .alpha_engine import AlphaEngine
 
 
 logger = logging.getLogger(__name__)
@@ -113,7 +114,7 @@ class BrawlerEngine:
             except Exception as exc:  # pragma: no cover - surfacing to logs
                 logger.error("Failed to restore state snapshot: %s", exc, exc_info=exc)
         self.portfolio = PortfolioController(config.portfolio)
-        self.discovery = DiscoveryEngine(config)
+        self.discovery = DiscoveryEngine(config, engine=self)
         self._last_cancel_ts: Dict[str, float] = {}
 
         # Economics
@@ -131,6 +132,9 @@ class BrawlerEngine:
             executor=self.executor,
             quote_stream=self.hyperliquid_stream
         )
+
+        
+        # Info Client for Reconciliation
         self.info_client = HyperliquidInfoClient(base_url=config.hyperliquid_rest_url)
 
         # Analytics
@@ -138,6 +142,17 @@ class BrawlerEngine:
         self.historical_analyzer = None
         self.per_asset_analyzer = None
         self.analytics_storage = None
+
+
+        # Alphas
+        self.alpha_engine = AlphaEngine()
+        
+        # Reconciliation
+        self.reconciler = OrderReconciler(
+            api=self.info_client,
+            wallet=config.hyperliquid_main_wallet
+        ) if config.hyperliquid_main_wallet else None
+
 
         if config.analytics.enabled:
             logger.info("Initializing Brawler analytics system")
@@ -323,12 +338,21 @@ class BrawlerEngine:
             if state.cex_mid_window.maxlen != maxlen:
                 state.cex_mid_window = deque(state.cex_mid_window, maxlen=maxlen)
             
-            # Rate limit updates for volatility stability (1Hz)
-            # We still want the LATEST price, but we don't need 50 updates/sec for volatility
+            # [OPTIMIZATION 1] Real-Time Updates (Removed 1s Throttle)
+            # Update the latest price immediately for low-latency quoting.
+            state.latest_cex_price = quote.mid
+            state.latest_cex_ts = quote.ts
+            
+            # Momentum Calculation
+            if state.cex_mid_window:
+                prev_price = state.cex_mid_window[-1]
+                dt = quote.ts - state.last_cex_mid_ts
+                if dt > 0.001:
+                    velocity_bps = ((quote.mid - prev_price) / prev_price) / dt * 10000.0
+                    state.cex_velocity = velocity_bps
+            
+            # Only rate-limit the expensive history push/sigma calc, not the price ref
             if quote.ts - state.last_cex_mid_ts < 1.0:
-                 # If queue is not empty, skip this one and get the next (fresher) one
-                 # If queue is empty, we might as well use this one to stay current?
-                 # Actually, for volatility, we want *stability*. Skipping is fine.
                  continue
 
             state.push_cex_mid(quote.mid, quote.ts)
@@ -347,6 +371,9 @@ class BrawlerEngine:
             
             # Update state with BBO
             state.update_bbo(quote.bid, quote.ask, quote.ts)
+            
+            # [ALPHA] Update Alpha Engine
+            self.alpha_engine.on_local_quote(quote)
             
             # Basis handling
             if state.last_cex_mid_ts > 0:
@@ -420,16 +447,28 @@ class BrawlerEngine:
             elapsed = time.time() - start
             await asyncio.sleep(max(0.0, interval - elapsed))
 
+    # [OPTIMIZATION 2] Parallelize the Asset Loop
+    # Added new helper _update_single_asset to allow asyncio.gather
     async def _update_quotes(self) -> None:
-        for symbol, cfg in self.config.assets.items():
-            try:
-                state = self.states[symbol]
-                decision = self._build_quote_decision(state)
-                if decision is None:
-                    continue
-                await self._ensure_orders(symbol, state, decision)
-            except Exception as exc:
-                logger.error("Failed to update quotes for %s: %s", symbol, exc, exc_info=exc)
+        tasks = []
+        for symbol in self.config.assets.keys():
+            tasks.append(self._update_single_asset(symbol))
+        
+        # Run all asset updates in parallel, ignore exceptions so one failure doesn't halt others
+        if tasks:
+            await asyncio.gather(*tasks, return_exceptions=True)
+
+    async def _update_single_asset(self, symbol: str) -> None:
+        """Helper to process a single asset safely within the parallel gather."""
+        try:
+            state = self.states[symbol]
+            decision = self._build_quote_decision(state)
+            if decision is None:
+                await self._cancel_all(symbol, state)
+                return
+            await self._ensure_orders(symbol, state, decision)
+        except Exception as exc:
+            logger.error("Failed to update quotes for %s: %s", symbol, exc, exc_info=exc)
 
     def _build_quote_decision(self, state: AssetState) -> Optional[QuoteDecision]:
         cfg = state.config
@@ -437,7 +476,11 @@ class BrawlerEngine:
         if not state.cex_mid_window:
             return None
 
-        mid_cex = state.cex_mid_window[-1]
+        if not state.cex_mid_window:
+            return None
+
+        # [HARDENING] Use the REAL-TIME latest price, not the windowed 1Hz price
+        mid_cex = getattr(state, "latest_cex_price", state.cex_mid_window[-1])
         pfair = mid_cex + state.fair_basis
         sigma = state.sigma
         now = time.time()
@@ -445,19 +488,46 @@ class BrawlerEngine:
         feed_reason = self._feed_suspension_reason(state, now)
         if feed_reason:
             if state.suspended_reason != feed_reason:
-                logger.warning("%s suspended: %s", cfg.symbol, feed_reason)
-            state.mark_suspended(feed_reason)
+                logger.warning("Suspending %s: %s", state.symbol, feed_reason)
+            state.suspended_reason = feed_reason
             return None
+            
+        # [ALPHA] Check Fear Signal
+        alpha_state = self.alpha_engine.states.get(cfg.symbol)
+        fear_side = alpha_state.fear_side if alpha_state else None
+        
+        if fear_side == 'both':
+            if state.suspended_reason != "alpha_fear_both":
+                logger.warning("Suspending %s: Fear Signal Active (Both Sides)", state.symbol)
+            state.suspended_reason = "alpha_fear_both"
+            return None
+        elif fear_side:
+            # Directional Fear -> Don't suspend entirely, just flag active direction
+            # We want to CONTINUE quoting the other side.
+            if state.suspended_reason:
+                 # If previously fully suspended, we might need to clear it to allow partial quoting?
+                 logger.info("Resuming %s (partial fear: %s)", state.symbol, fear_side)
+                 state.suspended_reason = None
+        else:
+             # No fear
+             pass
 
+        # Clear past suspension if we are here
+        if state.suspended_reason:
+            logger.info("Resuming %s (was %s)", state.symbol, state.suspended_reason)
+            state.suspended_reason = None
+        
         if sigma > cfg.max_volatility:
-            if state.suspended_reason != "volatility":
-                logger.warning("%s suspended: sigma=%.4f exceeds %.4f", cfg.symbol, sigma, cfg.max_volatility)
-            state.mark_suspended("volatility")
-            return None
+             if state.suspended_reason != "volatility":
+                 logger.warning("Suspending %s: Volatility %.4f > %.4f", cfg.symbol, sigma, cfg.max_volatility)
+             state.suspended_reason = "volatility"
+             return None
 
-        if abs(state.inventory) > cfg.max_inventory:
-            state.mark_suspended("inventory")
-            return None
+        # [REMOVED] Preemptive inventory check. We now allow generation of quotes
+        # so that _ensure_orders can apply "Reduce Only" logic.
+        # if abs(state.inventory) > cfg.max_inventory:
+        #    state.mark_suspended("inventory")
+        #    return None
 
         if cfg.max_basis_deviation > 0 and state.last_basis:
             basis_delta = abs(state.last_basis - state.fair_basis)
@@ -473,11 +543,13 @@ class BrawlerEngine:
                 return None
 
         if state.suspended_reason == "inventory":
-            ratio = abs(state.inventory) / cfg.max_inventory
-            if ratio <= cfg.reduce_only_ratio:
-                state.clear_suspension()
-            else:
-                return None
+            # If we were suspended for inventory, clear it now since we support ReduceOnly
+            state.clear_suspension()
+        #     ratio = abs(state.inventory) / cfg.max_inventory
+        #     if ratio <= cfg.reduce_only_ratio:
+        #         state.clear_suspension()
+        #     else:
+        #         return None
         elif state.suspended_reason and time.time() - state.last_suspend_ts > self.config.risk.resume_backoff_seconds:
             logger.info("Auto-resuming %s from %s", cfg.symbol, state.suspended_reason)
             state.clear_suspension()
@@ -485,38 +557,84 @@ class BrawlerEngine:
         if self.portfolio and not self.portfolio.allow_quotes(state):
             return None
 
-        base_spread = pfair * cfg.base_spread
-        vol_component = cfg.risk_aversion * sigma * pfair
-        total_spread = max(base_spread + vol_component, 0.0)
-        half_spread = total_spread / 2.0
+        # [HARDENING] Opportunity Filter: Minimum Basis Check
+        if cfg.min_basis_bps > 0:
+            basis_bps = 0.0
+            if mid_cex > 0:
+                basis_bps = abs(state.fair_basis / mid_cex) * 10000.0
+            
+            if basis_bps < cfg.min_basis_bps:
+                if state.suspended_reason != "low_edge":
+                    # Only log occasionally to avoid spam
+                    pass 
+                # We return None, which triggers _cancel_all in _update_quotes
+                return None
 
+        # [HARDENING] Momentum Guard
+        momentum_skew = 0.0
+        if cfg.momentum_threshold_bps > 0:
+            velocity = getattr(state, "cex_velocity", 0.0)
+            if abs(velocity) > cfg.momentum_threshold_bps:
+                # Momentum Guard effectively adds EXTRA spread during chaos.
+                sigma = max(sigma, 0.05) # Boost perceived vol
+                
+                # Optional: log momentum event
+                if random.random() < 0.05:
+                   logger.info("Momentum detected for %s: %.1f bps/s", cfg.symbol, velocity)
+
+        # -------------------------------------------------------------------------
+        # Dynamic Spread Calculation (Algorithmic Improvement)
+        # -------------------------------------------------------------------------
+        # Pfair * base_spread + Pfair * sigma * k + EconomicsPenalty
+        
+        # 1. Base + Volatility Component
+        # Config default 'vol_spread_multiplier' (k) is 5.0
+        # If sigma=0.0005 (low), add 0.0025 (25bps).
+        # If sigma=0.01 (high), add 0.05 (500bps).
+        dynamic_bps = cfg.base_spread + (sigma * cfg.vol_spread_multiplier)
+        
+        # 2. Economics Penalty (Low Budget -> Widen Spread)
+        budget_penalty = self.controller.calculate_spread_penalty(self.purse.request_budget)
+        
+        total_spread_bps = dynamic_bps + budget_penalty
+        
+        # 3. Cap at Max Spread
+        max_bps = self.config.economics.max_spread_bps / 10000.0
+        if total_spread_bps > max_bps:
+            total_spread_bps = max_bps
+            
+        half_spread_val = (total_spread_bps * pfair) / 2.0
+        
+        # Inventory Skew (Gamma)
         inv_ratio = 0.0
         if cfg.max_inventory > 0:
             inv_ratio = max(-1.0, min(1.0, state.inventory / cfg.max_inventory))
-        gamma = cfg.inventory_aversion * inv_ratio
+        gamma = cfg.inventory_aversion * inv_ratio * pfair # Convert to price delta
 
-        bid_price = self._normalize_price(cfg, pfair - half_spread - gamma)
-        ask_price = self._normalize_price(cfg, pfair + half_spread - gamma)
+        bid_price = self._normalize_price(cfg, pfair - half_spread_val - gamma)
+        ask_price = self._normalize_price(cfg, pfair + half_spread_val - gamma)
+        
+        # [ALPHA] Apply Directional Fear Cancellation
+        if fear_side == 'bid':
+            # Support vanished -> Don't Buy -> Cancel Bid
+            bid_price = 0.0
+        elif fear_side == 'ask':
+            # Resistance vanished -> Don't Sell -> Cancel Ask
+            ask_price = 0.0
+
         # Order Sizing
         if cfg.vol_sizing_risk_dollars > 0:
-            effective_sigma = max(sigma, 0.01)  # Floor at 1% vol to prevent massive sizing on flat markets
-            # risk_dollars = size_units * price * 2 * sigma
-            # size_units = risk_dollars / (price * 2 * sigma)
+            effective_sigma = max(sigma, 0.01)
             raw_size = cfg.vol_sizing_risk_dollars / (pfair * 2.0 * effective_sigma)
-            # Clamp to safe limits
-            # Using max_inventory as a sanity ceiling for single order
             order_size = min(raw_size, cfg.max_inventory)
 
-            # Log sizing logic periodically (approx every ~few seconds per asset if ticking fast)
+            # Log sizing logic periodically
             if random.random() < 0.05:
                 logger.info(
                     "Sizing %s: sigma=%.5f eff_sigma=%.4f risk=$%.2f pfair=%.4f -> raw=%.4f clamped=%.4f",
                     cfg.symbol, sigma, effective_sigma, cfg.vol_sizing_risk_dollars, pfair, raw_size, order_size
                 )
             
-            # Enforce Exchange Minimum Floor (User requested ~$10 min)
-            # We calculate value roughly: size * price
-            # If size * price < 10, bump size.
             val = order_size * pfair
             if val < 10.0:
                 order_size = 10.0 / pfair
@@ -529,10 +647,11 @@ class BrawlerEngine:
         if order_size <= 0:
             return None
 
+        # Build Decision
         return QuoteDecision(
             bid_price=bid_price,
             ask_price=ask_price,
-            half_spread=half_spread,
+            half_spread=half_spread_val,
             fair_value=pfair,
             sigma=sigma,
             gamma=gamma,
@@ -559,12 +678,23 @@ class BrawlerEngine:
         await self.binance_stream.subscribe(config.cex_symbol)
         await self.hyperliquid_stream.subscribe(config.symbol)
         
-        # 4. Bootstrap Inventory (Background)
-        if self.inventory_provider:
-            # We fire and forget the inventory fetch for this single asset
-            # Or we can just let it start at 0 and sync later if we had a full sync loop.
-            # For simplicity, we assume 0 start or wait for next fill/sync.
-            pass
+        # 4. Bootstrap Inventory
+        pass
+
+    async def _run_reconciliation(self) -> None:
+        """Periodic reconciliation loop."""
+        if not self.reconciler:
+            return
+            
+        while True:
+            try:
+                await asyncio.sleep(self.reconciler.interval)
+                await self.reconciler.reconcile(self.states)
+            except asyncio.CancelledError:
+                break
+            except Exception as e:
+                logger.error("Reconciliation error: %s", e, exc_info=True)
+                await asyncio.sleep(5.0)
 
     async def _ensure_orders(self, symbol: str, state: AssetState, decision: QuoteDecision) -> None:
         """Cancel/replace logic; only one resting order per side."""
@@ -576,24 +706,52 @@ class BrawlerEngine:
         if now - state.last_quote_ts < min_interval:
             return
 
-        side_offset = self._next_side_delay(symbol)
-        await self._maybe_replace_order(
-            symbol,
-            state,
-            decision.bid_price,
-            HyperliquidOrderSide.BUY,
-            decision.order_size,
-            side_delay=side_offset,
-        )
-        await self._maybe_replace_order(
-            symbol,
-            state,
-            decision.ask_price,
-            HyperliquidOrderSide.SELL,
-            decision.order_size,
-            side_delay=side_offset,
-        )
+        # [OPTIMIZATION 5] Removed side jitter (hardcoded to 0)
+        side_offset = 0.0 
+        
+        if self.executor:
+            # [OPTIMIZATION 3] Parallelize Bid and Ask Placement
+            # Fire both requests simultaneously to halve RTT.
+            await asyncio.gather(
+                self._maybe_replace_order(
+                    symbol,
+                    state,
+                    decision.bid_price,
+                    HyperliquidOrderSide.BUY,
+                    decision.order_size,
+                    side_delay=side_offset,
+                ),
+                self._maybe_replace_order(
+                    symbol,
+                    state,
+                    decision.ask_price,
+                    HyperliquidOrderSide.SELL,
+                    decision.order_size,
+                    side_delay=side_offset,
+                )
+            )
         state.last_quote_ts = now
+
+    async def _cancel_all(self, symbol: str, state: AssetState) -> None:
+        """Cancel all active orders for the symbol (used when suspended)."""
+        if not self.executor:
+            return
+        
+        if not state.active_bid and not state.active_ask:
+            return
+
+        # [OPTIMIZATION 3.5] Parallelize Cancels as well
+        tasks = []
+        if state.active_bid:
+            tasks.append(self._throttled_cancel(symbol, state.active_bid))
+            state.active_bid = None
+        
+        if state.active_ask:
+            tasks.append(self._throttled_cancel(symbol, state.active_ask))
+            state.active_ask = None
+            
+        if tasks:
+            await asyncio.gather(*tasks)
 
     async def _maybe_replace_order(
         self,
@@ -605,12 +763,35 @@ class BrawlerEngine:
         side_delay: float = 0.0,
     ) -> None:
         snapshot = state.active_bid if side == HyperliquidOrderSide.BUY else state.active_ask
+        
+        # REDUCE-ONLY ENFORCEMENT
+        # If inventory exceeds limit, prevent opening new positions on the increasing side.
+        # But ensure we CANCEL existing orders on that side.
+        cfg = state.config
+        blocked = False
+        if side == HyperliquidOrderSide.BUY and state.inventory >= cfg.max_inventory:
+            blocked = True
+        elif side == HyperliquidOrderSide.SELL and state.inventory <= -cfg.max_inventory:
+            blocked = True
+        
+        # Explicit Cancellation Instruction (Price <= 0)
+        if target_price <= 0:
+            blocked = True
+            
+        if blocked:
+            if snapshot and self.executor:
+                await self._throttled_cancel(symbol, snapshot)
+                if side == HyperliquidOrderSide.BUY:
+                    state.active_bid = None
+                else:
+                    state.active_ask = None
+            return
+
         tick = max(state.config.tick_size, 1e-12)
         
         # Dynamic Tolerance Calculation
         budget = self.purse.request_budget
         dynamic_ticks = self.controller.calculate_tolerance(budget)
-        # Use the greater of config-static tolerance or dynamic economic tolerance
         final_ticks = max(dynamic_ticks, state.config.quote_reprice_tolerance_ticks)
         
         tolerance = final_ticks * tick
@@ -717,17 +898,20 @@ class BrawlerEngine:
     async def _throttled_cancel(self, symbol: str, snapshot: Optional[OrderSnapshot]) -> None:
         if not snapshot or not snapshot.order_id or not self.executor:
             return
-        min_interval = max(0.0, self.config.risk.min_cancel_interval_ms / 1000.0)
-        last = self._last_cancel_ts.get(symbol, 0.0)
-        now = time.time()
-        delay = (last + min_interval) - now
-        if delay > 0:
-            await asyncio.sleep(delay)
+        
+        # [OPTIMIZATION 4] Removed Sleep on Cancel
+        # Never sleep during a cancellation/retreat.
+        # If rate limited, let the API error handler deal with it.
+        # min_interval = max(0.0, self.config.risk.min_cancel_interval_ms / 1000.0)
+        # last = self._last_cancel_ts.get(symbol, 0.0)
+        # now = time.time()
+        # delay = (last + min_interval) - now
+        # if delay > 0:
+        #    await asyncio.sleep(delay)
+        
         await self.executor.cancel_order(symbol, snapshot.order_id)
         self._last_cancel_ts[symbol] = time.time()
 
     def _next_side_delay(self, symbol: str) -> float:
-        jitter_ms = max(0.0, self.config.risk.side_jitter_ms)
-        if jitter_ms <= 0:
-            return 0.0
-        return random.uniform(0.0, jitter_ms / 1000.0)
+        # [OPTIMIZATION 5] Remove Jitter
+        return 0.0

@@ -132,3 +132,11 @@ class ToleranceController:
         dynamic = self.dilation_k / budget
         return max(self.min_tolerance_ticks, dynamic)
 
+    def calculate_spread_penalty(self, budget: float) -> float:
+        """Calculate additional spread penalty (raw float) based on budget."""
+        if budget >= 0:
+            return 0.0
+        # 1 bp per 200 unit deficit
+        unit_deficit = abs(budget) / 200.0
+        return min(unit_deficit * 0.0001, 0.01) # Cap at 100bps penalty
+

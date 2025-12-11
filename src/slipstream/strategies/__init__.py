@@ -80,6 +80,15 @@ STRATEGY_REGISTRY: Dict[str, StrategyInfo] = {
             "run_volume_gen": "slipstream.strategies.volume_generator.cli.run_volume_generator_cli",
         },
     ),
+    "spectrum": StrategyInfo(
+        key="spectrum",
+        title="Spectrum Idiosyncratic Arbitrage",
+        module="slipstream.strategies.spectrum",
+        description="Idiosyncratic statistical arbitrage system harvesting momentum, mean reversion, and funding carry premia.",
+        cli_entrypoints={
+            "run_spectrum": "slipstream.strategies.spectrum.cli.main",
+        },
+    ),
 }
 
 
