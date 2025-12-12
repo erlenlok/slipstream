@@ -96,12 +96,12 @@ def test_quote_generation_crash(engine, mock_config):
     """Simulate a -99% crash in one tick interaction."""
     state = AssetState(mock_config)
     # INITIAL STATE: Stable at $100
-    for _ in range(60):
-        state.cex_mid_window.append(100.0)
+    for i in range(60):
+        state.cex_mid_window.append((100.0, i*1.0))
     state.update_sigma()
     
     # SUDDEN CRASH: Price goes to $1
-    state.cex_mid_window.append(1.0) # Newest item
+    state.cex_mid_window.append((1.0, 61.0)) # Newest item
     state.latest_cex_price = 1.0 # Real-time feed update
     
     # Volatility should spike
@@ -127,11 +127,11 @@ def test_quote_generation_crash(engine, mock_config):
 def test_quote_generation_infinite_pump(engine, mock_config):
     """Simulate +10,000% pump."""
     state = AssetState(mock_config)
-    for _ in range(60):
-        state.cex_mid_window.append(10.0)
+    for i in range(60):
+        state.cex_mid_window.append((10.0, i*1.0))
     state.update_sigma()
     
-    state.cex_mid_window.append(1000.0)
+    state.cex_mid_window.append((1000.0, 61.0))
     state.latest_cex_price = 1000.0
     state.update_sigma()
     
@@ -171,14 +171,14 @@ async def test_inventory_cap_enforcement(engine, mock_config):
     engine.executor.cancel_order = AsyncMock()
     
     # Attempt to place BUY order
-    # _maybe_replace_order(symbol, state, target_price, side, size)
-    await engine._maybe_replace_order("TEST", state, 90.0, "buy", 10.0)
+    # _maybe_replace_order(symbol, state, target_price, side, size, is_reduce_only)
+    await engine._maybe_replace_order("TEST", state, 90.0, "buy", 10.0, is_reduce_only=False)
     
     # Verify: NO order placed
     engine.executor.place_limit_order.assert_not_called()
     
     # Scenario: Sell logic should be allowed (Reduce Only)
-    await engine._maybe_replace_order("TEST", state, 110.0, "sell", 10.0)
+    await engine._maybe_replace_order("TEST", state, 110.0, "sell", 10.0, is_reduce_only=False)
     
     # Verify: Order PLACED
     engine.executor.place_limit_order.assert_called_once()
@@ -197,13 +197,13 @@ async def test_inventory_short_cap_enforcement(engine, mock_config):
     engine.executor.cancel_order = AsyncMock()
 
     # Attempt to place SELL (adding to short)
-    await engine._maybe_replace_order("TEST", state, 110.0, "sell", 10.0)
+    await engine._maybe_replace_order("TEST", state, 110.0, "sell", 10.0, is_reduce_only=False)
     
     # Verify: NO order placed
     engine.executor.place_limit_order.assert_not_called()
     
     # Attempt to place BUY (reducing short)
-    await engine._maybe_replace_order("TEST", state, 90.0, "buy", 10.0)
+    await engine._maybe_replace_order("TEST", state, 90.0, "buy", 10.0, is_reduce_only=False)
     
     # Verify: Order PLACED
     engine.executor.place_limit_order.assert_called_once()

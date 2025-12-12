@@ -42,9 +42,9 @@ async def test_build_quote_decision_schema():
     # Setup State
     asset_cfg = BrawlerAssetConfig(symbol="TEST", cex_symbol="TESTUSDT", tick_size=0.001)
     state = AssetState(asset_cfg)
-    state.fair_basis = 0.1
+    state.fair_basis_bps = 50.0 # 50 BPS = 0.5%
     state.sigma = 0.01
-    state.cex_mid_window = [100.0]
+    state.cex_mid_window = [(100.0, 0.0)]
     setattr(state, "latest_cex_price", 100.0)
     
     # Run
@@ -53,7 +53,8 @@ async def test_build_quote_decision_schema():
     # Check
     assert decision is not None
     assert isinstance(decision, QuoteDecision)
-    assert decision.bid_price < 100.1  # Less than fair value
-    assert decision.ask_price > 100.1  # Greater than fair value
+    # Fair = 100 * (1.005) = 100.5
+    assert decision.bid_price < 100.5
+    assert decision.ask_price > 100.5
     # Check if half_spread was correctly calculated and passed
     assert decision.half_spread > 0

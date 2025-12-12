@@ -280,6 +280,7 @@ class HyperliquidOrder:
     size: float
     side: str  # 'buy' for bid, 'sell' for ask
     alo: bool = False
+    reduce_only: bool = False
 
 
 class HyperliquidOrderSide:
@@ -374,7 +375,7 @@ class HyperliquidExecutionClient:
             "sz": order.size,
             "limit_px": order.price,
             "order_type": {"limit": {"tif": tif}},
-            "reduce_only": False,
+            "reduce_only": order.reduce_only,
         }
         async with self._lock:
             response = await asyncio.to_thread(self.exchange.order, **kwargs)

@@ -2,30 +2,119 @@ assets:
   WIF:
     symbol: WIF
     cex_symbol: WIFUSDT
-    base_spread: 0.002
+    base_spread: 0.003
     volatility_lookback: 60
     risk_aversion: 5.0
-    max_inventory: 1600.0   # Approx $600
-    order_size: 530.0       # Approx $200
-    min_quote_interval_ms: 1000
-    tick_size: 0.0001
-    vol_sizing_risk_dollars: 0.0
-
+    max_inventory: 500.0    # ~$200 (@ 0.4)
+    order_size: 125.0       # ~$50
+    min_quote_interval_ms: 100
+    tick_size: 0.00001
+  
   kPEPE:
     symbol: kPEPE
     cex_symbol: 1000PEPEUSDT
+    base_spread: 0.003
+    volatility_lookback: 60
+    risk_aversion: 5.0
+    max_inventory: 45000.0  # ~$200 (@ 0.0045)
+    order_size: 11000.0     # ~$50
+    min_quote_interval_ms: 100
+    tick_size: 0.000001
+    
+  kBONK:
+    symbol: kBONK
+    cex_symbol: 1000BONKUSDT
+    base_spread: 0.003
+    volatility_lookback: 60
+    risk_aversion: 5.0
+    max_inventory: 20000.0  # ~$200 (@ 0.01)
+    order_size: 5000.0      # ~$50
+    min_quote_interval_ms: 100
+    tick_size: 0.000001
+
+  DOGE:
+    symbol: DOGE
+    cex_symbol: DOGEUSDT
     base_spread: 0.002
     volatility_lookback: 60
     risk_aversion: 5.0
-    max_inventory: 135000.0 # Approx $600 (0.0044 * 135k = 594)
-    order_size: 45000.0     # Approx $200
-    min_quote_interval_ms: 1000
+    max_inventory: 500.0    # ~$200 (@ 0.4)
+    order_size: 125.0       # ~$50
+    min_quote_interval_ms: 100
+    tick_size: 0.00001
+
+  kSHIB:
+    symbol: kSHIB
+    cex_symbol: 1000SHIBUSDT
+    base_spread: 0.003
+    volatility_lookback: 60
+    risk_aversion: 5.0
+    max_inventory: 8000.0   # ~$200 (@ 0.025)
+    order_size: 2000.0      # ~$50
+    min_quote_interval_ms: 100
     tick_size: 0.000001
-    vol_sizing_risk_dollars: 0.0
+
+  kFLOKI:
+    symbol: kFLOKI
+    cex_symbol: 1000FLOKIUSDT
+    base_spread: 0.003
+    volatility_lookback: 60
+    risk_aversion: 5.0
+    max_inventory: 1000.0   # ~$200 (@ 0.2)
+    order_size: 250.0       # ~$50
+    min_quote_interval_ms: 100
+    tick_size: 0.00001
+
+  POPCAT:
+    symbol: POPCAT
+    cex_symbol: POPCATUSDT
+    base_spread: 0.003
+    volatility_lookback: 60
+    risk_aversion: 5.0
+    max_inventory: 200.0    # ~$X (@ 1.0?)
+    order_size: 50.0
+    min_quote_interval_ms: 100
+    tick_size: 0.0001
+
+  BRETT:
+    symbol: BRETT
+    cex_symbol: BRETTUSDT
+    base_spread: 0.003
+    volatility_lookback: 60
+    risk_aversion: 5.0
+    max_inventory: 1500.0   # ~$200 (@ 0.15)
+    order_size: 350.0       # ~$50
+    min_quote_interval_ms: 100
+    tick_size: 0.00001
+
+  MEW:
+    symbol: MEW
+    cex_symbol: MEWUSDT
+    base_spread: 0.003
+    volatility_lookback: 60
+    risk_aversion: 5.0
+    max_inventory: 25000.0  # ~$200 (@ 0.008)
+    order_size: 6000.0      # ~$50
+    min_quote_interval_ms: 100
+    tick_size: 0.000001
+
+  kDOGS:
+    symbol: kDOGS
+    cex_symbol: 1000DOGSUSDT
+    base_spread: 0.003
+    volatility_lookback: 60
+    risk_aversion: 5.0
+    max_inventory: 200000.0 # ~$200 (@ 0.001)
+    order_size: 50000.0     # ~$50
+    min_quote_interval_ms: 100
+    tick_size: 0.000001
 
 risk:
-  tick_interval_ms: 1000
+  tick_interval_ms: 100     # 10Hz loop
   metrics_flush_seconds: 60.0
+  cex_queue_maxsize: 5000
+  local_queue_maxsize: 5000
+  fill_queue_maxsize: 2000
 
 kill_switch:
   max_disconnection_seconds: 30.0
@@ -34,8 +123,8 @@ economics:
   cost_per_request_usd: 0.00035
   reload_threshold_budget: 1000.0
   reload_target_budget: 5000.0
-  reload_symbol: "BTC"
-  max_spread_bps: 10.0
+  reload_symbol: "SOL"
+  max_spread_bps: 20.0
 
 analytics:
   enabled: true

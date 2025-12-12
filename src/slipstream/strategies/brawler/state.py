@@ -31,12 +31,12 @@ class AssetState:
     def symbol(self) -> str:
         return self.config.symbol
 
-    fair_basis: float = 0.0
-    cex_mid_window: Deque[float] = field(default_factory=lambda: deque(maxlen=600))
+    fair_basis_bps: float = 0.0
+    cex_mid_window: Deque[Tuple[float, float]] = field(default_factory=lambda: deque(maxlen=600))
     sigma: float = 0.0
     last_cex_mid_ts: float = 0.0
     last_local_mid_ts: float = 0.0
-    last_basis: float = 0.0
+    last_basis_bps: float = 0.0
     last_cex_latency: float = 0.0
     last_local_latency: float = 0.0
     inventory: float = 0.0
@@ -44,22 +44,30 @@ class AssetState:
     active_ask: Optional[OrderSnapshot] = None
     suspended_reason: Optional[str] = None
     last_suspend_ts: float = 0.0
+    last_suspend_ts: float = 0.0
     last_quote_ts: float = 0.0
+    latest_cex_price: float = 0.0
+    latest_cex_ts: float = 0.0
+    
+    # Latency Metering
+    last_trigger_ts: float = 0.0
+    last_trigger_source: str = "none"
+    last_calc_ts: float = 0.0
 
-    def update_basis(self, instantaneous_basis: float) -> float:
-        """EMA-update for the anchoring basis."""
+    def update_basis(self, instantaneous_basis_bps: float) -> float:
+        """EMA-update for the anchoring basis (in BPS)."""
         alpha = self.config.basis_alpha
-        if self.fair_basis == 0.0:
-            self.fair_basis = instantaneous_basis
+        if self.fair_basis_bps == 0.0:
+            self.fair_basis_bps = instantaneous_basis_bps
         else:
-            self.fair_basis = alpha * instantaneous_basis + (1.0 - alpha) * self.fair_basis
-        return self.fair_basis
+            self.fair_basis_bps = alpha * instantaneous_basis_bps + (1.0 - alpha) * self.fair_basis_bps
+        return self.fair_basis_bps
 
     def push_cex_mid(self, price: float, timestamp: Optional[float] = None) -> None:
         """Track recent CEX mids for volatility estimation."""
         ts = timestamp or time.time()
         now = time.time()
-        self.cex_mid_window.append(price)
+        self.cex_mid_window.append((price, ts))
         self.last_cex_mid_ts = ts
         self.last_cex_latency = max(0.0, now - ts)
 
@@ -92,7 +100,7 @@ class AssetState:
 
         import math
 
-        values = list(window)
+        values = [x[0] for x in window]
         log_returns = []
         for prev, current in zip(values, values[1:]):
             if current > 0 and prev > 0:
@@ -123,14 +131,14 @@ def build_initial_states(configs: Dict[str, BrawlerAssetConfig]) -> Dict[str, As
 @dataclass
 class AssetSnapshot:
     symbol: str
-    fair_basis: float
-    last_basis: float
+    fair_basis_bps: float
+    last_basis_bps: float
     inventory: float
 
     def as_dict(self) -> Dict[str, float]:
         return {
-            "fair_basis": self.fair_basis,
-            "last_basis": self.last_basis,
+            "fair_basis_bps": self.fair_basis_bps,
+            "last_basis_bps": self.last_basis_bps,
             "inventory": self.inventory,
         }
 
@@ -138,8 +146,8 @@ class AssetSnapshot:
     def from_mapping(cls, symbol: str, payload: Mapping[str, float]) -> "AssetSnapshot":
         return cls(
             symbol=symbol,
-            fair_basis=float(payload.get("fair_basis") or 0.0),
-            last_basis=float(payload.get("last_basis") or 0.0),
+            fair_basis_bps=float(payload.get("fair_basis_bps") or 0.0),
+            last_basis_bps=float(payload.get("last_basis_bps") or 0.0),
             inventory=float(payload.get("inventory") or 0.0),
         )
 
@@ -148,8 +156,8 @@ def capture_state(states: Dict[str, AssetState]) -> Dict[str, AssetSnapshot]:
     return {
         symbol: AssetSnapshot(
             symbol=symbol,
-            fair_basis=state.fair_basis,
-            last_basis=state.last_basis,
+            fair_basis_bps=state.fair_basis_bps,
+            last_basis_bps=state.last_basis_bps,
             inventory=state.inventory,
         )
         for symbol, state in states.items()
@@ -161,8 +169,8 @@ def restore_state(states: Dict[str, AssetState], snapshots: Mapping[str, AssetSn
         state = states.get(symbol)
         if not state:
             continue
-        state.fair_basis = snapshot.fair_basis
-        state.last_basis = snapshot.last_basis
+        state.fair_basis_bps = snapshot.fair_basis_bps
+        state.last_basis_bps = snapshot.last_basis_bps
         state.inventory = snapshot.inventory
 
 
