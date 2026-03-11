@@ -5,16 +5,18 @@ assets:
   SOL:
     symbol: SOL
     cex_symbol: solusdt
-    base_spread: 0.002           # 20 bps base spread (conservative)
+
+    base_spread: 5.0             # 5 bps base spread (tight)
     volatility_lookback: 60      # samples (~30s @ 500ms tick)
     risk_aversion: 5.0           # aggressively widen with vol
     basis_alpha: 0.05            # slower basis tracking
-    max_inventory: 1.0           # max 1.0 SOL inventory
+    max_inventory: 0.6           # max 0.6 SOL inventory (~100 USDC)
     inventory_aversion: 0.5      # stronger skew for small inventory
-    order_size: 0.2              # 0.2 SOL order size (~$26, >$10 min)
+    order_size: 0.0              # ignored
+    target_size_usd: 100.0       # 100 USDC target size
     max_volatility: 0.02         # suspend if sigma > 2%
-    max_basis_deviation: 0.01    # suspend if basis > 1% deviation
-    min_quote_interval_ms: 500   # standard throttling
+    max_basis_deviation: 100.0   # suspend if basis > 100bps deviation
+    min_quote_interval_ms: 100   # 100ms Hz (High Frequency)
     reduce_only_ratio: 0.9       # strict reduce-only
     tick_size: 0.01              # Hyperliquid SOL tick size
     quote_reprice_tolerance_ticks: 2.0
@@ -54,3 +56,9 @@ portfolio:
 candidate_screening:
   min_samples: 2000
   score_min: 0.0
+
+discovery:
+  enabled: false
+
+economics:
+  max_spread_bps: 500.0

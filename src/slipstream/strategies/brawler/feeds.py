@@ -14,6 +14,7 @@ class CexQuote:
     bid: float
     ask: float
     ts: float
+    recv_ts: float = 0.0
 
     @property
     def mid(self) -> float:

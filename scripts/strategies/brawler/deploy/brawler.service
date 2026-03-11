@@ -6,7 +6,8 @@ After=network.target
 Type=simple
 User=ubuntu
 WorkingDirectory=/home/ubuntu/slipstream
-ExecStart=/home/ubuntu/slipstream/.venv/bin/python -m slipstream.strategies.brawler.cli --config prod_brawler.yaml
+Environment="BRAWLER_ENV_FILE=/home/ubuntu/slipstream/config/env/.brawler"
+ExecStart=/home/ubuntu/slipstream/.venv/bin/python -m slipstream.strategies.brawler.cli --config config/brawler_sol_test.yaml
 Restart=on-failure
 RestartSec=10
 StandardOutput=journal

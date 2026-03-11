@@ -83,6 +83,7 @@ class BinanceTickerStream:
                     self._ws = ws
                     logger.info("Binance bookTicker stream connected: %s", stream)
                     async for raw in ws:
+                        recv_ts = time.time()
                         if self._stop.is_set():
                             break
                         try:
@@ -91,14 +92,14 @@ class BinanceTickerStream:
                             continue
 
                         data = payload.get("data") or payload
-                        quote = self._parse_quote(data)
+                        quote = self._parse_quote(data, recv_ts)
                         if quote:
                             self._publish_quote(quote)
             except Exception as exc:
                 logger.warning("Binance stream error: %s", exc, exc_info=exc)
                 await asyncio.sleep(self.reconnect_backoff)
 
-    def _parse_quote(self, data) -> Optional[CexQuote]:
+    def _parse_quote(self, data, recv_ts: float) -> Optional[CexQuote]:
         symbol = data.get("s")
         if not symbol:
             return None
@@ -113,8 +114,8 @@ class BinanceTickerStream:
         if bid <= 0 or ask <= 0:
             return None
 
-        ts = data.get("T") or data.get("E") or int(time.time() * 1000)
-        return CexQuote(symbol=symbol.upper(), bid=bid, ask=ask, ts=ts / 1000.0)
+        ts = data.get("T") or data.get("E") or int(recv_ts * 1000)
+        return CexQuote(symbol=symbol.upper(), bid=bid, ask=ask, ts=ts / 1000.0, recv_ts=recv_ts)
 
     def _publish_quote(self, quote: CexQuote) -> None:
         try:

@@ -115,7 +115,14 @@ def _load_env_files() -> None:
     candidates = []
     if preferred:
         candidates.append(preferred)
-    candidates.extend([".env.brawler", ".env.gradient"])
+    candidates.extend(
+        [
+            ".env.brawler",
+            ".env.gradient",
+            "config/env/.brawler",
+            "config/env/.gradient",
+        ]
+    )
 
     loaded = 0
     for candidate in candidates:

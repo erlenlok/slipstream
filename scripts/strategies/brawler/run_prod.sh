@@ -3,7 +3,7 @@ set -e
 
 # Load brawler env
 if [ -f .env.brawler ]; then
-    export $(cat .env.brawler | grep -v '#' | xargs)
+    export $(cat config/env/.brawler | grep -v '#' | xargs)
 fi
 
 # Determine log level (default INFO for prod)

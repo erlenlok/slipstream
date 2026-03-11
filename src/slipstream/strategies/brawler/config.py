@@ -54,22 +54,23 @@ class BrawlerAssetConfig:
 
     symbol: str
     cex_symbol: str
-    base_spread: float = 0.001
+    base_spread: float = 10.0   # 10 bps default
     volatility_lookback: int = 60
     risk_aversion: float = 5.0
     basis_alpha: float = 0.05
     max_inventory: float = 1.5
     inventory_aversion: float = 0.25
     order_size: float = 0.1
+    target_size_usd: float = 0.0  # If > 0, overrides order_size with N / price
     max_volatility: float = 0.02
-    max_basis_deviation: float = 0.005
+    max_basis_deviation: float = 50.0 # 50 bps default
     min_quote_interval_ms: int = 500
     reduce_only_ratio: float = 0.92
     tick_size: float = 0.1
     quote_reprice_tolerance_ticks: float = 1.0
     vol_sizing_risk_dollars: float = 0.0  # If > 0, overrides order_size with N / (2 * sigma)
     # Algorithmic Improvements
-    vol_spread_multiplier: float = 5.0  # Widen spread by k * sigma
+    vol_spread_multiplier: float = 5000.0  # Widen spread by k * sigma (0.001 * 5000 = 5 bps)
     
     # Discovery
     min_basis_bps: float = 0.0  # Opportunity Filter: Stop quoting if basis < X bps
@@ -181,7 +182,10 @@ class BrawlerConfig:
     discovery: BrawlerDiscoveryConfig = field(default_factory=BrawlerDiscoveryConfig)
     economics: BrawlerEconomicsConfig = field(default_factory=BrawlerEconomicsConfig)
     analytics: BrawlerAnalyticsConfig = field(default_factory=BrawlerAnalyticsConfig)
-
+    
+    # Strategy Selection
+    strategy_type: str = "standard"  # Options: "standard", "simple", etc.
+    
 
     def asset(self, symbol: str) -> BrawlerAssetConfig:
         try:

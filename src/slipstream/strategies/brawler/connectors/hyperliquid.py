@@ -281,6 +281,8 @@ class HyperliquidOrder:
     side: str  # 'buy' for bid, 'sell' for ask
     alo: bool = False
     reduce_only: bool = False
+    cex_event_ts: float = 0.0
+    cex_recv_ts: float = 0.0
 
 
 class HyperliquidOrderSide:
@@ -378,7 +380,20 @@ class HyperliquidExecutionClient:
             "reduce_only": order.reduce_only,
         }
         async with self._lock:
+            t_send = time.time()
             response = await asyncio.to_thread(self.exchange.order, **kwargs)
+            t_ack = time.time()
+        
+        if order.cex_event_ts > 0:
+            total = t_ack - order.cex_event_ts
+            recv_total = t_ack - order.cex_recv_ts
+            wire = order.cex_recv_ts - order.cex_event_ts
+            logic = t_send - order.cex_recv_ts
+            rtt = t_ack - t_send
+            logger.info(
+                "LATENCY_TRACE Symbol=%s Total=%.3fs RecvTotal=%.3fs | Breakdown: Wire=%.3fs Logic=%.3fs RTT=%.3fs",
+                order.symbol, total, recv_total, wire, logic, rtt
+            )
         order_id = _extract_order_id(response)
         return HyperliquidOrderUpdate(order_id=order_id or None, status="ok")
 

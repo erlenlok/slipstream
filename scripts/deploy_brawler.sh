@@ -1,9 +1,9 @@
 #!/bin/bash
 set -e
 
-SERVICE_FILE="brawler.service"
+SERVICE_FILE="scripts/strategies/brawler/deploy/brawler.service"
 LOCAL_PATH="/home/ubuntu/slipstream/$SERVICE_FILE"
-SYSTEM_PATH="/etc/systemd/system/$SERVICE_FILE"
+SYSTEM_PATH="/etc/systemd/system/$(basename $SERVICE_FILE)"
 
 echo "--- Brawler Deployment ---"
 echo "Source: $LOCAL_PATH"

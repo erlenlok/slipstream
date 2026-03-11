@@ -1,6 +1,6 @@
 {
   "strategy": "gradient_momentum_30pct_24h",
-  "capital_usd": 450,
+  "capital_usd": 1800,
   "max_position_pct": 10,
   "max_total_leverage": 3.0,
   "concentration_pct": 30,

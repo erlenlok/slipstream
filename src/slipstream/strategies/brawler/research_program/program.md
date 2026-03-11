@@ -1,0 +1,127 @@
+# Brawler Research Program: HFT Baselines & Metric Engineering
+
+**Status:** Draft  
+**Target:** "Antigravity"  
+**Objective:** Transition Brawler operations from heuristic "guessing" to scientific measurement of Latency, Toxicity, and Execution Quality.
+
+## 1. Executive Summary
+
+We operate under the hypothesis that we possess a 150ms "Last Look" advantage (Binance $\rightarrow$ Hyperliquid). However, profitability is inconsistent. This program establishes a rigorous audit of that advantage and implements a "Shadow Mode" to safely iterate on pricing logic without capital risk.
+
+**Core Thesis:** If we are truly faster than the market, our "Markout" (post-trade PnL) must be positive. If it is negative, our speed advantage is illusory or our pricing model is defective.
+
+## 2. Phase I: The "Speed of Light" Audit (Latency)
+
+### The Problem
+We currently measure `Tick_Arrived` $\rightarrow$ `Order_Sent`. This is insufficient. We must measure `Binance_Event_Time` $\rightarrow$ `Hyperliquid_Ack`.
+
+### Methodology
+We will trace a single price update packet through the entire lifecycle using a unique `trace_id`.
+
+| Metric | Definition | Target | Failure Threshold |
+| :--- | :--- | :--- | :--- |
+| **Wire Latency** | `Server_Recv_Time` - `Binance_Event_Time` | < 50ms | > 100ms |
+| **Internal Latency** | `Order_Sent_Time` - `Server_Recv_Time` | < 5ms | > 15ms |
+| **RTT Latency** | `Hyperliquid_Ack_Time` - `Order_Sent_Time` | < 50ms | > 200ms |
+| **Total Reaction** | `Hyperliquid_Ack_Time` - `Binance_Event_Time` | < 150ms | > 300ms |
+
+### Action Item
+Implement `LatencyTrace` logging in ResearchLab.
+
+- **Success:** We confirm we can cancel stale quotes before a Taker sees the CEX price update.
+- **Failure:** If Total Reaction > Last Look Window, we must move servers (Tokyo/Singapore) or rewrite the Python critical path in Rust.
+
+## 3. Phase II: Markout Analysis (Toxicity)
+
+### The Concept
+Market Making is the business of selling insurance against volatility. "Toxicity" (Adverse Selection) occurs when we sell insurance immediately before a crash.
+
+### The Metric
+PnL of a fill at time $T + \Delta t$.
+
+$$
+\text{Markout}(\Delta t) = \text{Side} \times (\text{MidPrice}_{t+\Delta t} - \text{FillPrice}_t)
+$$
+
+**Side:** +1 for Buy, -1 for Sell.
+
+### Interpretation
+- **Positive:** We captured the spread and the price remained stable. (Good)
+- **Zero:** We broke even (scratched).
+- **Negative:** The market moved against us immediately. We were "run over."
+
+### Benchmarks
+We will track three horizons:
+- **T+100ms (Immediate):** Did we get sniped by a faster bot? (Latency issue)
+- **T+1s (Short Term):** Did we quote a bad price relative to CEX momentum? (Logic issue)
+- **T+10s (Medium Term):** Did we fail to predict a larger trend? (Alpha issue)
+
+### Action Item
+All fills (Real and Shadow) must be logged to `research_markouts` table.
+
+- **Goal:** Markout @ 1s > (Spread / 4).
+- **Kill Switch:** If Markout @ 1s < 0 consistently, halt trading.
+
+## 4. Phase III: Shadow Brawler (Simulation)
+
+### The Logic
+We cannot "backtest" market making accurately because we cannot simulate queue position. However, we can "Forward Test" using Shadow Orders.
+
+### Mechanism
+1. Brawler calculates Bid / Ask / Size normally.
+2. Instead of sending to API, we store in memory (`ShadowBook`).
+3. We listen to the Public Trade Feed from Hyperliquid.
+
+### Execution Logic (Pessimistic)
+- If `Public_Trade_Price` $\le$ `Shadow_Bid`, we assume a fill.
+- If `Public_Trade_Price` $\ge$ `Shadow_Ask`, we assume a fill.
+
+### Advantages
+- **Zero Risk:** Test aggressive spreads or new "Basis" formulas without losing money.
+- **Basis Calibration:** We can run 3 different Basis calculations (e.g., Fixed, Rolling, VPIN-weighted) simultaneously in Shadow Mode to see which yields the best Markouts.
+
+### Limitations
+- **Queue Bias:** We assume we are at the back of the queue (Pessimistic). Real performance may be slightly better (passive fills).
+- **Impact:** We assume our order wouldn't change market behavior.
+
+## 5. Technical Implementation
+
+### Architecture
+The ResearchLab is a sidecar module attached to the main `BrawlerEngine`.
+
+```mermaid
+graph TD
+    A[Binance WS] -->|Event| B(Brawler Engine)
+    B -->|Logic| C{Mode?}
+    C -->|Real| D[Hyperliquid API]
+    C -->|Shadow| E[Shadow Book]
+    D -->|Ack| F[Latency Logger]
+    G[Hyperliquid WS] -->|Public Trades| E
+    E -->|Fill Event| H[Markout Analyzer]
+    D -->|Fill Event| H
+    H -->|SQL| I[(TimescaleDB)]
+```
+
+### Database Schema (SQL)
+- `research_latency`: High-resolution timestamps for every tick cycle.
+- `research_markouts`: PnL tracking for every fill.
+
+## 6. Execution Plan
+
+### Day 1-2: Latency Audit
+- Deploy ResearchLab in `LOG_ONLY` mode (no shadow, no trading).
+- Collect 24h of Latency Traces.
+- **Output:** A histogram of Total Reaction Time.
+
+### Day 3-4: Shadow Calibration
+- Turn on `SHADOW_MODE`.
+- Run current "Rolling Window" Basis logic.
+- **Output:** Markout curve for the current strategy.
+
+### Day 5+: Iteration
+- If Markouts are negative: Widen `vol_spread_multiplier`.
+- If Latency is >200ms: Optimize network/code.
+- If Markouts are positive but volume is low: Tighten spreads.
+
+---
+*Generated for Brawler Systems | 2025*

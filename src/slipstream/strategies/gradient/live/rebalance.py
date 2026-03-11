@@ -17,12 +17,12 @@ from typing import Any, Dict, List
 try:
     from dotenv import load_dotenv
     # Load the gradient-specific env file first, then generic one
-    env_file = Path(__file__).parent.parent.parent.parent.parent / ".env.gradient"
+    env_file = Path(__file__).parent.parent.parent.parent.parent / "config/env/.gradient"
     if env_file.exists():
         load_dotenv(env_file, override=False)
     else:
         # Try alternative locations
-        env_file = Path.cwd() / ".env.gradient"
+        env_file = Path.cwd() / "config/env/.gradient"
         if env_file.exists():
             load_dotenv(env_file, override=False)
 

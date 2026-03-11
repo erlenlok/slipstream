@@ -48,6 +48,7 @@ class AssetState:
     last_quote_ts: float = 0.0
     latest_cex_price: float = 0.0
     latest_cex_ts: float = 0.0
+    latest_cex_recv_ts: float = 0.0
     
     # Latency Metering
     last_trigger_ts: float = 0.0
@@ -174,10 +175,26 @@ def restore_state(states: Dict[str, AssetState], snapshots: Mapping[str, AssetSn
         state.inventory = snapshot.inventory
 
 
+@dataclass
+class QuoteDecision:
+    bid_price: float
+    ask_price: float
+    half_spread: float
+    fair_value: float
+    sigma: float
+    gamma: float
+    order_size: float
+    is_reduce_only_bid: bool
+    is_reduce_only_ask: bool
+    cex_event_ts: float = 0.0
+    cex_recv_ts: float = 0.0
+
+
 __all__ = [
     "AssetSnapshot",
     "AssetState",
     "OrderSnapshot",
+    "QuoteDecision",
     "build_initial_states",
     "capture_state",
     "restore_state",
